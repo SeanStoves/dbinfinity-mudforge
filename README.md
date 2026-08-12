@@ -18,6 +18,7 @@ The plugins then appear in the plugin browser.
 | plugin | what it does |
 |---|---|
 | **[Scouter](docs/scouter.md)** (`dbi-map`) | The local map as a scouter readout, with `scan` power levels under it |
+| **[Portrait](docs/portrait.md)** (`dbi-portrait`) | Your character: avatar, vitals, power level, and the full score sheet |
 
 ## Before you start
 
