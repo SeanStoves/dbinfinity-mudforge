@@ -1,6 +1,6 @@
 # Scouter
 
-<img src="scouter.png" alt="The Scouter panel: a green phosphor lens showing the local map, with a scan reading for a wild boar underneath" width="229" align="right">
+<img src="../img/scouter.png" alt="The Scouter panel: a green phosphor lens showing the local map, with a scan reading for a wild boar underneath" width="229" align="right">
 
 The local map as a scouter readout, driven by Dragonball Infinity's GMCP `Map`
 module rather than by scraping the output.
