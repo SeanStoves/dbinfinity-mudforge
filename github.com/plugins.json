@@ -3,7 +3,7 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: a scouter map and a character portrait.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-12T20:49:45Z",
+  "generated": "2026-08-12T21:00:45Z",
   "pluginCount": 2,
   "plugins": [
     {
@@ -29,8 +29,8 @@
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-portrait.json",
       "format": "json",
-      "sha256": "4f7ffdbcb9d6996f161170ab6e435b8c474e3dc204a2a8c95993a108e683861a",
-      "size": 31164,
+      "sha256": "e508dd14c32322fcc3b5d7c9263bc8c726620bd47ec9a99a8b3c8764dae46353",
+      "size": 37434,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/portrait.md"
     }
