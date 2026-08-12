@@ -37,6 +37,8 @@ unprompted.
 
 ### Scouter (`dbi-map`)
 
+<img src="docs/scouter.png" alt="The Scouter panel: a green phosphor lens showing the local map, with a scan reading for a wild boar underneath" width="229" align="right">
+
 The local map as a scouter readout. Colours come from the server's own style
 table, so sectors, mobs, exits, doors and your own position keep their meaning.
 
