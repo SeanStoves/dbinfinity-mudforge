@@ -11,3 +11,6 @@ secrets/
 *.swp
 *~
 .DS_Store
+
+# tooling stub, not part of the published repo
+CLAUDE.md
