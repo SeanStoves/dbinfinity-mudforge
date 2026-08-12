@@ -22,7 +22,10 @@ gains and your EQ bonus.
 
 ## The avatar
 
-Picked automatically from race and sex. If there's no art for your race yet you
+![Every bundled avatar](../img/avatar-set.png)
+
+Picked automatically from race and sex — all sixteen races, both sexes, plus a
+generic silhouette for anything unrecognised. If there's no art for your race yet you
 get a plain frame rather than a broken image, and you can always point it at
 your own:
 
