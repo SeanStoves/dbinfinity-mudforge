@@ -1,0 +1,13 @@
+# Nothing that authenticates as anyone ends up in a public repo
+.env
+.env.*
+secrets/
+*.secret
+*.local.lua
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
