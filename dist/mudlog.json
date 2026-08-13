@@ -1,6 +1,6 @@
 {
   "author": "Solao",
-  "category": "tools",
+  "category": "widgets",
   "description": "Plain-text session transcripts on disk, the way Mudlet and MushClient write them.",
   "id": "mudlog",
   "name": "Transcript",
