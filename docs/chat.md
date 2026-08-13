@@ -67,7 +67,7 @@ your output is worse than one you have to look at twice.
 | `chat diag` | what the plugin currently sees |
 
 Everything else is on the **setup** tab: which tabs are shown, what each rule
-does, the master gag, the backdrop and the panel opacity.
+does, the master gag, the text size, the backdrop and the panel opacity.
 
 ## Notes
 
@@ -75,7 +75,10 @@ Links in chat are clickable. Only `http` and `https` are ever linked — chat is
 the most attacker-influenced text a plugin handles here, so nothing else gets
 turned into something you can click.
 
-The panel follows your terminal's font. It keeps 400 lines per tab.
+The panel follows your terminal's font until you tell it not to. **Text size**
+under setup nudges it a point at a time between 8 and 28; the first nudge starts
+from whatever the terminal is currently at, so nothing jumps. It keeps 400 lines
+per tab.
 
 ## Credits
 
