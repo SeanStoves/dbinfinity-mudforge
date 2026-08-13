@@ -47,6 +47,18 @@ Upload it anywhere that serves `https` — an image host, a gist, a repo — and
 that URL. It is how the bundled avatars load, and it follows you to another
 machine rather than living on one disk.
 
+**A share page works too.** An imgur album link is a web page rather than a
+picture, so it would otherwise load markup and show nothing. Hand one over and
+the plugin fetches it once and reads the image the page advertises:
+
+```
+portrait avatar https://imgur.com/a/Ih3oyvz
+```
+
+The first request to a new host asks your permission — that is the client, once
+per domain, and it is remembered. A link that already ends in `.png`, `.jpg`,
+`.gif` or `.webp` is used directly and costs no request at all.
+
 The URL is checked rather than cleaned. It ends up inside a CSS `url()`, so
 anything carrying a quote, a bracket, a backslash or a space is refused and the
 previous avatar is kept.
