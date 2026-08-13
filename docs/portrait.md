@@ -35,9 +35,20 @@ portrait avatar /home/you/Pictures/me.png
 portrait avatar clear
 ```
 
-A path is turned into a `file://` URL for you. Whether the client will load a
-local file is up to the client, not the plugin — if the frame stays empty, that
-is why, and hosting the image somewhere reachable is the way round it.
+A path is turned into a `file://` URL for you.
+
+Whether the client will load a local file is up to the client, not the plugin.
+If the frame stays empty, that is why.
+
+**Put the image online instead.** Anywhere that serves it over `https` will do —
+an image host, a gist, a repo of your own — then point the command at that URL.
+It is how the bundled avatars are loaded, so it is known to work, and it follows
+you to another machine rather than living on one disk.
+
+There is one toggle worth trying first if you would rather keep it local:
+**Settings → Plugins → DB Infinity Portrait → Permissions → File System
+Access**, then reconnect. It is documented as covering `io.open` rather than
+images, so it may do nothing at all — it is simply the only switch there is.
 
 The URL is checked rather than cleaned. It ends up inside a CSS `url()`, so
 anything carrying a quote, a bracket, a backslash or a space is refused and the
