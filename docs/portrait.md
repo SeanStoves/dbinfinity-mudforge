@@ -31,8 +31,17 @@ your own:
 
 ```
 portrait avatar https://example.com/me.png
+portrait avatar /home/you/Pictures/me.png
 portrait avatar clear
 ```
+
+A path is turned into a `file://` URL for you. Whether the client will load a
+local file is up to the client, not the plugin — if the frame stays empty, that
+is why, and hosting the image somewhere reachable is the way round it.
+
+The URL is checked rather than cleaned. It ends up inside a CSS `url()`, so
+anything carrying a quote, a bracket, a backslash or a space is refused and the
+previous avatar is kept.
 
 ## Commands
 
@@ -41,7 +50,7 @@ portrait avatar clear
 | `portrait` | the command list |
 | `portrait show` / `portrait hide` | the panel |
 | `portrait sheet` / `portrait portrait` | switch view without the gear |
-| `portrait avatar <https url>` / `clear` | your own image, or back to the race one |
+| `portrait avatar <url or path>` / `clear` | your own image, or back to the race one |
 | `portrait name <name>` / `clear` | correct the name, or back to what `score` says |
 | `portrait opacity <0-100>` | `0` reads straight through it |
 | `portrait diag` | what the plugin currently sees |
