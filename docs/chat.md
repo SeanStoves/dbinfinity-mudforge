@@ -69,6 +69,11 @@ your output is worse than one you have to look at twice.
 Everything else is on the **setup** tab: which tabs are shown, what each rule
 does, the master gag, the text size, the backdrop and the panel opacity.
 
+**Backdrop image** under setup takes any `http`/`https` URL, or blank for the
+one that ships with the plugin. It is checked rather than cleaned: the URL ends
+up inside a CSS `url()`, so anything carrying a quote, bracket or backslash is
+refused outright and the bundled image is used instead.
+
 Setup is one form with a **Save** at the bottom, and nothing applies until you
 press it. That is deliberate. Every control used to apply on click, and applying
 meant repainting the panel, and repainting put the scroll back at the top — so
