@@ -39,8 +39,8 @@ a restart.
 
 ## Routing
 
-Every rule, built-in or yours, is in one of three modes. Click it under
-**setup** to cycle:
+Every rule, built-in or yours, is in one of three modes, set from the dropdown
+beside it under **setup**:
 
 | mode | does |
 |---|---|
@@ -68,6 +68,17 @@ your output is worse than one you have to look at twice.
 
 Everything else is on the **setup** tab: which tabs are shown, what each rule
 does, the master gag, the text size, the backdrop and the panel opacity.
+
+Setup is one form with a **Save** at the bottom, and nothing applies until you
+press it. That is deliberate. Every control used to apply on click, and applying
+meant repainting the panel, and repainting put the scroll back at the top — so
+changing anything below the first screenful bounced you away from what you were
+doing. A checkbox or a dropdown changes in the browser without telling the
+plugin, so now nothing moves until you say so.
+
+Deleting a capture is still a single click, because removing a row changes the
+shape of the list and has to redraw anyway. It sits below the Save button so
+nothing above it shifts.
 
 ## Notes
 

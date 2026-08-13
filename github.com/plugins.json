@@ -3,7 +3,7 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-13T04:19:47Z",
+  "generated": "2026-08-13T12:47:03Z",
   "pluginCount": 4,
   "plugins": [
     {
@@ -37,14 +37,14 @@
     {
       "id": "dbi-chat",
       "name": "DB Infinity Chat",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "author": "Solao",
       "description": "Tabbed chat for Dragonball Infinity, with user-defined captures.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-chat.json",
       "format": "json",
-      "sha256": "cdc8be5229c1a9a270ab43eec935d429d7dd9683b77babce9aa783017d8f3220",
-      "size": 38433,
+      "sha256": "143d5eede8ad2499eb51de6bd5a1e437cfe6c5a62adde11e1ebab0782ff1a657",
+      "size": 41178,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/chat.md"
     },
