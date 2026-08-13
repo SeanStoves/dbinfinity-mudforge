@@ -15,9 +15,18 @@ because this is the repository that exists.
 be on — plugin settings, Permissions tab.
 
 Without it, `io.open` still succeeds. It just writes to a pseudo-file inside the
-world file instead of to your disk, so the plugin reports that everything is
-fine and no file ever appears. If `mudlog status` looks healthy and the folder
-is empty, that is this and nothing else.
+world file instead of to your disk.
+
+The plugin checks rather than assumes. On the first write it creates a
+throwaway file and deletes it again — `os.remove` returns true only with real
+filesystem access — and says so if the answer is no:
+
+```
+[Transcript] File System Access is OFF -- nothing is reaching your disk.
+```
+
+`mudlog status` reports the same thing as `realFilesystem=`. If that says `no`,
+no other number in the status output means anything.
 
 ## Where the files go
 
