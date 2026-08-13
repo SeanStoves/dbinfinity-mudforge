@@ -35,27 +35,17 @@ portrait avatar /home/you/Pictures/me.png
 portrait avatar clear
 ```
 
-A path is turned into a `file://` URL for you.
+**It has to be a URL, not a file on your disk.** A local file cannot be shown in
+a widget by this client at all — its own helper converts a path to
+`asset://localhost/...` rather than `file://`, and that protocol is not enabled
+in the build, so there is no scheme the webview will fetch a local image over.
+The File System Access permission does not change it, and neither does putting
+the file in `~/MudForge/plugin-files`: that folder scopes `io.open`, which is a
+different question.
 
-A local file only loads from inside **`~/MudForge/plugin-files`**. Anywhere else
-on the disk is outside the client's sandbox and loads nothing at all, silently,
-leaving the race avatar on screen. The File System Access permission does not
-change this — the location is the limit, not the permission.
-
-So copy the image in first:
-
-```
-mkdir -p ~/MudForge/plugin-files/dbi-portrait
-cp ~/Pictures/me.png ~/MudForge/plugin-files/dbi-portrait/
-portrait avatar /home/you/MudForge/plugin-files/dbi-portrait/me.png
-```
-
-Pointing at something outside that folder still sets it, and says why it will
-not appear.
-
-**Hosting it is the other way**, and the more portable one: anywhere serving
-`https` will do, and it follows you to another machine rather than living on one
-disk. That is how the bundled avatars load.
+Upload it anywhere that serves `https` — an image host, a gist, a repo — and use
+that URL. It is how the bundled avatars load, and it follows you to another
+machine rather than living on one disk.
 
 The URL is checked rather than cleaned. It ends up inside a CSS `url()`, so
 anything carrying a quote, a bracket, a backslash or a space is refused and the
