@@ -20,6 +20,20 @@ bars, power level against base, zeni and alignment.
 position, carry weight, the full kill and spar record, crits, tokens, session
 gains and your EQ bonus.
 
+## It remembers
+
+The sheet comes from `score`, and `score` only arrives when you ask for it, so
+the panel used to open blank after a restart. It is saved now and comes back
+straight away — **saved per character**, so an alt does not open wearing the
+last one's face, race and power level. Your avatar is kept per character too.
+
+Whoever was on last is what loads. If you swapped characters since, type
+`score` once and it corrects itself.
+
+The bars are the exception and stay empty until GMCP speaks, which takes a
+second or two. A saved bar reading full lifeforce on a character sitting at
+twenty percent is worse than an empty one.
+
 ## The avatar
 
 ![Every bundled avatar](../img/avatar-set.png)
