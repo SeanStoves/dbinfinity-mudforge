@@ -1,4 +1,4 @@
-# Chat
+# DB Infinity Chat
 
 Channel traffic split into tabs, with the MUD's own colours kept intact.
 

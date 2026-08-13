@@ -17,9 +17,9 @@ The plugins then appear in the plugin browser.
 
 | plugin | what it does |
 |---|---|
-| **[Scouter](docs/scouter.md)** (`dbi-map`) | The local map as a scouter readout, with `scan` power levels under it |
-| **[Portrait](docs/portrait.md)** (`dbi-portrait`) | Your character: avatar, vitals, power level, and the full score sheet |
-| **[Chat](docs/chat.md)** (`dbi-chat`) | Channel traffic split into tabs, with captures you define |
+| **[DB Infinity Scouter](docs/scouter.md)** (`dbi-map`) | The local map as a scouter readout, with `scan` power levels under it |
+| **[DB Infinity Portrait](docs/portrait.md)** (`dbi-portrait`) | Your character: avatar, vitals, power level, and the full score sheet |
+| **[DB Infinity Chat](docs/chat.md)** (`dbi-chat`) | Channel traffic split into tabs, with captures you define |
 
 ## Before you start
 

@@ -1,4 +1,4 @@
-# Scouter
+# DB Infinity Scouter
 
 <img src="../img/scouter.png" alt="The Scouter panel: a green phosphor lens showing the local map, with a scan reading for a wild boar underneath" width="229" align="right">
 

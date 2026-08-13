@@ -1,4 +1,4 @@
-# Portrait
+# DB Infinity Portrait
 
 Your character, drawn from two sources because neither is enough alone.
 
