@@ -37,18 +37,25 @@ portrait avatar clear
 
 A path is turned into a `file://` URL for you.
 
-Whether the client will load a local file is up to the client, not the plugin.
-If the frame stays empty, that is why.
+A local file only loads from inside **`~/MudForge/plugin-files`**. Anywhere else
+on the disk is outside the client's sandbox and loads nothing at all, silently,
+leaving the race avatar on screen. The File System Access permission does not
+change this — the location is the limit, not the permission.
 
-**Put the image online instead.** Anywhere that serves it over `https` will do —
-an image host, a gist, a repo of your own — then point the command at that URL.
-It is how the bundled avatars are loaded, so it is known to work, and it follows
-you to another machine rather than living on one disk.
+So copy the image in first:
 
-There is one toggle worth trying first if you would rather keep it local:
-**Settings → Plugins → DB Infinity Portrait → Permissions → File System
-Access**, then reconnect. It is documented as covering `io.open` rather than
-images, so it may do nothing at all — it is simply the only switch there is.
+```
+mkdir -p ~/MudForge/plugin-files/dbi-portrait
+cp ~/Pictures/me.png ~/MudForge/plugin-files/dbi-portrait/
+portrait avatar /home/you/MudForge/plugin-files/dbi-portrait/me.png
+```
+
+Pointing at something outside that folder still sets it, and says why it will
+not appear.
+
+**Hosting it is the other way**, and the more portable one: anywhere serving
+`https` will do, and it follows you to another machine rather than living on one
+disk. That is how the bundled avatars load.
 
 The URL is checked rather than cleaned. It ends up inside a CSS `url()`, so
 anything carrying a quote, a bracket, a backslash or a space is refused and the
