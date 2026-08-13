@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "name": "Solao's Dragonball Infinity Plugins",
-  "description": "GMCP-driven panels for Dragonball Infinity: a scouter map and a character portrait.",
+  "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-13T03:54:09Z",
-  "pluginCount": 3,
+  "generated": "2026-08-13T04:05:18Z",
+  "pluginCount": 4,
   "plugins": [
     {
       "id": "dbi-map",
@@ -47,6 +47,20 @@
       "size": 38433,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/chat.md"
+    },
+    {
+      "id": "mudlog",
+      "name": "Transcript",
+      "version": "0.1.1",
+      "author": "Solao",
+      "description": "Plain-text session transcripts on disk, the way Mudlet and MushClient write them.",
+      "category": "tools",
+      "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/mudlog.json",
+      "format": "json",
+      "sha256": "9303ddcf33cae3268378b4361519e6932e60728a86ce7516def2052c87644793",
+      "size": 22916,
+      "license": "MIT",
+      "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/transcript.md"
     }
   ]
 }

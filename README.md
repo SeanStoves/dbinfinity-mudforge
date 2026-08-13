@@ -20,6 +20,7 @@ The plugins then appear in the plugin browser.
 | **[DB Infinity Scouter](docs/scouter.md)** (`dbi-map`) | The local map as a scouter readout, with `scan` power levels under it |
 | **[DB Infinity Portrait](docs/portrait.md)** (`dbi-portrait`) | Your character: avatar, vitals, power level, and the full score sheet |
 | **[DB Infinity Chat](docs/chat.md)** (`dbi-chat`) | Channel traffic split into tabs, with captures you define |
+| **[Transcript](docs/transcript.md)** (`mudlog`) | Plain-text session logs on disk, for any MUD. Needs the File System Access permission |
 
 ## Before you start
 
