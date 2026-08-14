@@ -49,17 +49,26 @@ Receive Function: Active
 Encrypt Function: Not Installed
 ```
 
-The panel reads that block wherever it appears and shows what it said. A button
+The panel reads that block wherever it appears and shows what it said. It is one
+row and stays one row: a second line of chrome above a 15x15 lens is most of the
+panel. A button
 lights only when the MUD has actually reported `Active`; before the block has
 been seen once they read `tx ?` and `rcv ?` rather than drawing a switch in a
-position nobody has confirmed. `no crypt` appears when encryption is not
-installed.
+position nobody has confirmed. Encryption is the padlock — closed when it is
+active, open when it is not. It is drawn rather than written, in the panel's own
+phosphor, because the words took a whole second row to say nothing most
+characters need.
 
 Clicking **TX** or **RCV** asks the MUD to flip it and then asks what it did —
 the switch belongs to the game, and the panel does not keep a second copy of it
-that could drift. Typing a number in the channel field and pressing **set**
+that could drift. Typing a number in the channel field and pressing the **tick**
 sends `scouter frequency <n>`; anything that is not digits is refused here
 rather than sent, since it is field text going out as a command.
+
+The tick lights while you are in the channel field. It cannot tell whether you
+actually changed the number — no script runs inside a widget, so there is
+nothing to compare the field against — but being in the field is the same moment
+in practice.
 
 `dbscout comms` asks for the block without touching the panel.
 
