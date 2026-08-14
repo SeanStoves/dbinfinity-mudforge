@@ -35,13 +35,20 @@ The panel opens on its own. `dbmap hide` closes it, `dbmap show` brings it back.
 | `@` | the room you are in |
 | `?` | an exit seen but never walked, in the direction it leads |
 | `U` / `D` | stairs up and down, in the room's corners; red where unwalked |
-| 🚪 / 🔒 | a door on the connection between two rooms |
+| 🚪 / 🔒 | a closed or locked door on the connection between two rooms |
 
 Hovering a room gives its name, vnum, area, every exit and where it goes, the
 exits still unwalked, and any doors.
 
 Clicking a room walks you to it. Clicking a door cycles it: closed, locked,
-open, gone — doors are recorded automatically and only ever removed by hand.
+gone — doors are recorded automatically and only ever removed by hand.
+
+**An open door is not drawn.** The server's local map uses one style for an open
+door and for a doorway that never had a door in it, so "open" was never
+something it told us — it was what the map assumed when a door it had recorded
+read back as a plain exit. A single bad reading then decayed into a permanent
+faded doorway instead of going away. Doors are only ever recorded upward now:
+closed or locked, or nothing.
 
 `+` and `−` zoom. Clicking the area name in the footer opens a searchable list
 of every area the MUD's `areas` command knows, with the power range for each,
