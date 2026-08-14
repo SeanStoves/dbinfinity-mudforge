@@ -70,6 +70,24 @@ actually changed the number — no script runs inside a widget, so there is
 nothing to compare the field against — but being in the field is the same moment
 in practice.
 
+Until it has been read once there is a single **scouter display** button in
+place of the row, which goes and asks. Nothing is saved between sessions on
+purpose: TX, RCV and the channel can all be changed in game by other means, so a
+restored value would be last session's reading shown as this session's — a
+confident answer that might be wrong, which is worse than an empty one.
+
+The reading is dropped again when it stops being true:
+
+- **you die** — whether the scouter survives or not, what it was set to before
+  is not what it is set to now
+- **you take a scouter off, or put anything on your eyes** — they are not the
+  same device. A Primitive Scouter reads channel 0, transmit and receive
+  inactive, and a detection capacity of 1,000,000; a blue-crystal one reads 624,
+  both active, and a hundred billion
+
+In each case the button comes back rather than the panel carrying on with a
+number that belonged to something else.
+
 `dbscout comms` asks for the block without touching the panel.
 
 ## The lens
