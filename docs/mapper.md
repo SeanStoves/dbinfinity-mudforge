@@ -75,10 +75,17 @@ but it only shows what is near you. `dbmap view` on its own says which is up.
 Rooms are coloured by terrain, using **the MUD's own palette**. `Map.Definition`
 names a colour for all fifty-one of its styles — a green field, a grey city, a
 yellow road — so a room that is green on the server's local map is green here
-rather than in some second scheme invented for this panel. The border takes the
-colour as the server gives it and the fill takes it faded, because those are
-full-saturation terminal colours and a panel full of `#00ff00` boxes is not
-readable.
+rather than in some second scheme invented for this panel.
+
+**It colours the border, not the room.** These are full-saturation terminal
+colours; filling with them turns the map into a grid of blocks and swallows the
+glyph, the `@` and anything else sitting on the room. The edge says the same
+thing and stays out of the way. A flag draws its border heavier than a sector's,
+so a room somebody marked wins the edge off a sector that merely happens to be
+there.
+
+Hovering a room names its ground, which is usually the answer to "why is that
+one a different colour".
 
 **Sectors are read from the rooms around you, not the one you are in.** The
 server spends your own square saying "you are here" — its style is `current`, not
@@ -222,10 +229,7 @@ On the panel, a flag colour paints over the terrain colour, which is the order
 the client's own map uses. A flag's glyph only shows in a room that has nothing
 of its own to show, so it never replaces the `@`.
 
-**Pick a bright colour.** A flag fill is composited onto a near-black panel, so
-a dark one lands within a few points of the plain room it is meant to stand out
-from — the first `teleport` default was `#3a2a5e` and came out invisible. The
-picker is on the **colours and symbols** page, next to the sectors.
+The picker for both is on the **colours and symbols** page.
 
 Under the map is a **legend**: one entry per flag that draws a glyph, in that
 glyph's own colour. Once you are past two or three symbols it is the difference
