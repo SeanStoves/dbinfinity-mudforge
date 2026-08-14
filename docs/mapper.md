@@ -37,12 +37,22 @@ without Scouter; they just record as you bump into them.
 ```
 dbmap            what the commands are
 dbmap diag       what it has recorded so far
-dbmap on         recording, which is where it starts out
-dbmap off        stop; the map keeps what it has
+dbmap on         follow and record. Where it starts out
+dbmap follow     follow, but write nothing down
+dbmap off        neither
 ```
 
-Recording is remembered, so a `dbmap off` you forgot about is still off next
-login and the map quietly stops growing.
+**`follow` is the one to reach for in an area you have already mapped.** The
+panel keeps up with you and the `@` keeps moving, but nothing new is written —
+no rooms, no exits, no stubs, no doors, no terrain. `off` used to be the only
+way to stop a map growing, and it also stopped the panel being any use.
+
+Walk somewhere unmapped while following and it says so rather than leaving the
+`@` on the last room it did know. It cannot follow you to a room it has never
+seen, and a confident wrong answer is worse than an empty one.
+
+The mode is remembered, so a `dbmap off` you forgot about is still off next
+login and the map quietly stops growing. `dbmap mode` says which one you are in.
 
 The panel opens on its own. `dbmap hide` closes it, `dbmap show` brings it back.
 
