@@ -90,6 +90,24 @@ middle stays clear for the `@`.
 
 Hovering a room names its ground, and says so plainly when there is none yet.
 
+Some rooms never get one on their own. The server only names the sector of a
+room you are standing **next to**, so a corridor walked straight down can end up
+with the ends read and the middle blank, and a room nobody has ever stood beside
+stays blank for good. Set those by hand:
+
+```
+dbmap ground              what this room is
+dbmap ground inside       set it
+dbmap ground 40271 city   or one by vnum
+dbmap ground 40271-40280 inside   or a run of them
+dbmap ground none         take it off again
+```
+
+A name the MUD does not use is accepted and warned about — it will draw plain
+until it has a colour on the **colours and symbols** page. `none` matters more
+than it looks: nothing on the wire ever contradicts a sector, so a wrong one set
+by hand is permanent until it is cleared by hand.
+
 A room whose ground has not been recorded is drawn in a deliberately quiet
 grey — quieter than most sectors wash to. Absence should not be the thing that
 catches your eye: for a while the default was brighter than a real sector, so
