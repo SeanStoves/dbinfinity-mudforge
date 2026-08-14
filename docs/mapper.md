@@ -88,8 +88,13 @@ The room is **quartered**. Stairs own two corners, up top right and down bottom
 left; a flag's glyph takes one of the two that are left, up to two per room. The
 middle stays clear for the `@`.
 
-Hovering a room names its ground, which is usually the answer to "why is that
-one a different colour".
+Hovering a room names its ground, and says so plainly when there is none yet.
+
+A room whose ground has not been recorded is drawn in a deliberately quiet
+grey — quieter than most sectors wash to. Absence should not be the thing that
+catches your eye: for a while the default was brighter than a real sector, so
+the one room in a corridor that had not been read yet was the loudest square on
+the map.
 
 **Sectors are read from the rooms around you, not the one you are in.** The
 server spends your own square saying "you are here" — its style is `current`, not
