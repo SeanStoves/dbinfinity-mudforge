@@ -189,6 +189,22 @@ letters whose meaning is actually known are read; an unrecognised prefix is left
 alone rather than given a name it may not have. As more are confirmed they get
 added.
 
+`teleport` is defined too, for a room that takes you somewhere — a tesseract
+bay, a portal, anything you speak or type your way out of. The MUD has no style
+for those (all fifty-one of its styles are sectors, mobs, doors and items), so
+they are tagged by hand; the definition just means the tag draws once you do.
+
+Pair it with `dbgo` to record where the room actually goes. In a tesseract bay
+that lists five destinations:
+
+```
+dbmap flag teleport
+dbgo say Snake Way
+```
+
+The flag says "this room is a way out", and each `dbgo` writes the special exit
+for one destination, so pathfinding can use it afterwards.
+
 Everything else is by hand:
 
 ```
