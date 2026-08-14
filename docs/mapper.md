@@ -121,6 +121,36 @@ Both are area view only. `dbmap view local` lays the neighbourhood out by
 walking exits outward from where you are standing, so there are no coordinates
 to offset and no floor to step to, and the controls stay away.
 
+## Room flags
+
+A flag is a tag on a room — `healing`, `quest`, `pk`, whatever you find worth
+marking. They are the client's own subsystem rather than anything this plugin
+invented, so they live on the room, travel with a map export, and are searchable
+without a plugin at all.
+
+**This MUD flags some rooms in the name itself.** `(H) Healing Chamber` is one,
+and the `H` is the healing flag, so walking into it tags it — no typing. Only
+letters whose meaning is actually known are read; an unrecognised prefix is left
+alone rather than given a name it may not have. As more are confirmed they get
+added.
+
+Everything else is by hand:
+
+```
+dbmap flag quest         tag this room; the same command takes it off again
+dbmap unflag quest       take it off whatever it was
+dbmap flags              this room's tags, and every flag the map knows
+```
+
+A flag does not have to be defined before you use it. An undefined tag is still
+kept and still searchable — it simply draws nothing until someone gives it a
+look, which you can do from **Map Settings → Room Flags…** without touching the
+plugin. A defined flag tints the room and can carry a glyph or a small icon.
+
+On the panel, a flag colour paints over the terrain colour, which is the order
+the client's own map uses. A flag's glyph only shows in a room that has nothing
+of its own to show, so it never replaces the `@`.
+
 ## Finding your way
 
 ```
