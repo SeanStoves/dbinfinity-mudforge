@@ -72,6 +72,23 @@ in practice.
 
 `dbscout comms` asks for the block without touching the panel.
 
+## The lens
+
+```
+dbscout lens          what it is now, and what else there is
+dbscout lens blue     change it
+```
+
+Green because that is what a scouter looks like. The rest are the colours this
+MUD uses for its own text — red, blue, cyan, yellow, orange, purple, pink,
+white, grey — and each one moves the whole panel together: the map, the dim
+labels and the bright edges, not just the text.
+
+That set is not arbitrary. The MUD describes a scouter by its lens — *a scouter
+with a blue-crystal lens* — and colours those words with the same tokens. So the
+panel can eventually just be the colour of the one you are wearing; picking it
+by hand is the first half of that.
+
 | command | does |
 |---|---|
 | `dbscout` | the command list |
@@ -89,6 +106,7 @@ in practice.
 | `dbscout diag` | what the plugin currently sees |
 | `dbscout raw` / `dbscout packages` | the GMCP payloads, and every package held |
 | `dbscout comms` | read TX, RCV and the channel back off the MUD |
+| `dbscout lens <colour>` | what shade the panel glows |
 | `dbscout api [filter]` | every function bound in `_G`, optionally filtered |
 | `dbscout debug` | what a `scan` parsed, plus the skipped-hello note |
 
