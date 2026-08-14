@@ -102,10 +102,20 @@ MUD uses for its own text — red, blue, cyan, yellow, orange, purple, pink,
 white, grey — and each one moves the whole panel together: the map, the dim
 labels and the bright edges, not just the text.
 
-That set is not arbitrary. The MUD describes a scouter by its lens — *a scouter
-with a blue-crystal lens* — and colours those words with the same tokens. So the
-panel can eventually just be the colour of the one you are wearing; picking it
-by hand is the first half of that.
+**It sets itself.** The MUD names the lens in the item, and putting one on says
+so:
+
+```
+You place A scouter with a blue-crystal lens on your eyes.
+```
+
+The panel turns blue. Put on something that names no lens — *A Primitive
+Scouter* — and it goes back to green rather than keeping the last one's colour.
+
+It matches `<colour>-crystal` rather than hunting for a colour word anywhere in
+the line, which would find the `red` in `sacred`. A lens phrased some other way
+will not be recognised and you will get green; `dbscout lens` still sets it by
+hand, until the next time you put a scouter on.
 
 | command | does |
 |---|---|
