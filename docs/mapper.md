@@ -234,6 +234,9 @@ to a square already taken. The map says so rather than drawing a tidy lie, and
 these fix it:
 
 ```
+dbmap nudge w            move the room you are in, west
+dbmap nudge w 3          or further -- useful after a teleport drops you
+                         on top of somewhere already mapped
 dbmap nudge e s          move the room east of you, south
 dbmap nudge 10014 s 2    or by vnum, further
 dbmap nudge 10014 reset  put it back
