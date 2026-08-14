@@ -37,6 +37,19 @@ The panel opens on its own. `dbmap hide` closes it, `dbmap show` brings it back.
 | `U` / `D` | stairs up and down, in the room's corners; red where unwalked |
 | 🚪 / 🔒 | a closed or locked door on the connection between two rooms |
 
+Rooms are coloured by terrain, using **the MUD's own palette**. `Map.Definition`
+names a colour for all fifty-one of its styles — a green field, a grey city, a
+yellow road — so a room that is green on the server's local map is green here
+rather than in some second scheme invented for this panel. The border takes the
+colour as the server gives it and the fill takes it faded, because those are
+full-saturation terminal colours and a panel full of `#00ff00` boxes is not
+readable.
+
+Terrain is recorded for the room you are standing in, as the server draws it. So
+colour arrives as you walk: rooms already on your map from before stay plain
+until you next pass through them, and a room the server never gave a sector for
+stays plain for good rather than being guessed at.
+
 Hovering a room gives its name, vnum, area, every exit and where it goes, the
 exits still unwalked, and any doors.
 
