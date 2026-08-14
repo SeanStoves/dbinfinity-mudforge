@@ -70,10 +70,15 @@ colour as the server gives it and the fill takes it faded, because those are
 full-saturation terminal colours and a panel full of `#00ff00` boxes is not
 readable.
 
-Terrain is recorded for the room you are standing in, as the server draws it. So
-colour arrives as you walk: rooms already on your map from before stay plain
-until you next pass through them, and a room the server never gave a sector for
-stays plain for good rather than being guessed at.
+**Sectors are read from the rooms around you, not the one you are in.** The
+server spends your own square saying "you are here" — its style is `current`, not
+a sector — so a room learns its ground while you are standing next door. There
+is nowhere else the information comes from.
+
+Colour therefore arrives one step behind you, and fills in as you walk. A cell
+showing something other than ground — a lift, a mob, an item — is telling you
+about its contents rather than its sector, so nothing is recorded for it and the
+room stays plain until a later look says otherwise. Plain rather than guessed.
 
 Hovering a room gives its name, vnum, area, every exit and where it goes, the
 exits still unwalked, and any doors.
