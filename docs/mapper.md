@@ -104,17 +104,32 @@ dbmap distance e 3       how far apart rooms sit, per axis
 
 A nudge is remembered on the room, so a later relayout keeps it.
 
-## Areas
+## Areas — set this first
 
-The MUD never says which area you are in, so it is worked out. Crossing a
-special exit starts a provisional one; name it properly when you know.
+The one thing the mapper cannot work out for itself. This MUD sends no room
+package, so nothing in the output says which area a room belongs to; rooms are
+filed under whichever area is current, and it has to be told what that is.
+
+A new map starts in **LEGENDE**, the MUD's own level-one area, because that is
+where a new character actually is. It is a starting guess and nothing more, and
+the plugin says so the first time it runs on an empty map rather than letting it
+pass for knowledge. Left alone, everything you walk piles into that one name —
+which is easy not to notice until there are two hundred rooms under it.
 
 ```
+areas                    the MUD's own list, which fills the picker
 dbmap area <name>        new rooms go here
 dbmap rename <name>      this area was never called that; brings its rooms
 dbmap take 4 go          pull the last 4 rooms into this area
 dbmap moveto <area> go   move whatever 'find' just listed
 ```
+
+Clicking the area name at the foot of the panel opens the same list, searchable,
+with the power range for each — so you can switch to somewhere before walking a
+single room of it. Run `areas` once to fill it.
+
+Crossing a special exit starts a provisional area; name it properly when you
+know what it is.
 
 ## Travel that is not a direction
 
