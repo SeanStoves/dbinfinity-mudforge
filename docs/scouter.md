@@ -34,6 +34,35 @@ also why this map works in Mudlet with no setup: Mudlet greets unprompted.
 
 ## Commands
 
+## The comms row
+
+Under the title bar: **TX**, **RCV** and the channel.
+
+The scouter is a radio as well as a lens, and the MUD keeps that state itself —
+`scouter display` prints it:
+
+```
+Energy Detection Capacity: 100,000,000,000
+Channel Frequency: 624
+Transmit Function: Active
+Receive Function: Active
+Encrypt Function: Not Installed
+```
+
+The panel reads that block wherever it appears and shows what it said. A button
+lights only when the MUD has actually reported `Active`; before the block has
+been seen once they read `tx ?` and `rcv ?` rather than drawing a switch in a
+position nobody has confirmed. `no crypt` appears when encryption is not
+installed.
+
+Clicking **TX** or **RCV** asks the MUD to flip it and then asks what it did —
+the switch belongs to the game, and the panel does not keep a second copy of it
+that could drift. Typing a number in the channel field and pressing **set**
+sends `scouter frequency <n>`; anything that is not digits is refused here
+rather than sent, since it is field text going out as a command.
+
+`dbscout comms` asks for the block without touching the panel.
+
 | command | does |
 |---|---|
 | `dbscout` | the command list |
@@ -50,6 +79,7 @@ also why this map works in Mudlet with no setup: Mudlet greets unprompted.
 | `dbscout hello` | send another `Core.Hello` |
 | `dbscout diag` | what the plugin currently sees |
 | `dbscout raw` / `dbscout packages` | the GMCP payloads, and every package held |
+| `dbscout comms` | read TX, RCV and the channel back off the MUD |
 | `dbscout api [filter]` | every function bound in `_G`, optionally filtered |
 | `dbscout debug` | what a `scan` parsed, plus the skipped-hello note |
 
