@@ -103,11 +103,15 @@ room a floor above or below rather than beside, and the panel draws one floor at
 a time. Which is the right answer while you are walking, and no help at all when
 you are standing in a basement wondering what is above you.
 
-The pad at the bottom right moves the view off yourself — four arrows for one
-room at a time, and the middle button to snap back. On an area with more than
-one floor, **▲** and **▼** appear in the top bar and step to the next floor that
-exists, not the next number: a tower with a basement and a roof and nothing
-between them is one press each way.
+Drag the map to move the view off yourself, the same as pulling a paper one
+across a desk. On an area with more than one floor, **▲** and **▼** appear in the
+top bar and step to the next floor that exists, not the next number: a tower
+with a basement and a roof and nothing between them is one press each way.
+
+The drag redraws once per room crossed rather than once per pixel — every redraw
+is a round trip out to the plugin and back — so a short pull inside one room's
+width does nothing, and then it steps. Grabbing the top or bottom bar does not
+start a drag, so the buttons there still press.
 
 While the view is off you, a marker in the corner says which floor you are
 looking at and that you have panned — click it to come home. Walking snaps it
