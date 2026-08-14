@@ -295,6 +295,38 @@ A room is only ever in one area. Arriving somewhere never re-files it — the
 room's own record wins, and `dbmap take` and `dbmap moveto` remain the only ways
 to move one.
 
+## Instant transmission
+
+```
+instant cybrus
+```
+
+Just use it. No `dbgo`, no switching the area by hand first.
+
+The MUD's own `help itpoints` lists the mob you can IT to and the area each one
+is in, and that table is compiled in — so the destination has a name before you
+arrive. `instant`, `planewalk` and android `tesseract` are all recognised, and
+the jump is recorded as a jump: no exit is written between where you left and
+where you landed, because there is no way to walk it.
+
+Land somewhere already mapped and that room's own area wins, as always. Land
+somewhere new and the itpoints table names it.
+
+Three targets deliberately name nothing, because the MUD's own list is ambiguous
+about them: `Vemura` is given as both Feldron and The Polluted Delta, and
+`Lesser` and `3.Dabura` are given as "Shadow Earth", which is a planet of four
+areas rather than an area. Those still register as a jump — the arrival is not
+recorded as a step — they just start a provisional area you can rename.
+
+The alignment delay is handled. IT takes about six seconds on the same planet
+and fifteen off it, far longer than an ordinary move, so the jump stays pending
+until you actually land. If you walk somewhere in the meantime, that step is
+recorded as a step and the jump is left waiting.
+
+An instant that never fires — no Ki, in combat, a target that is not an itpoint
+— claims nothing. The command says where you are aiming; the MUD's own
+departure line is what says you went, and a failed attempt never prints it.
+
 ## Travel that is not a direction
 
 ```
