@@ -125,6 +125,34 @@ Both are area view only. `dbmap view local` lays the neighbourhood out by
 walking exits outward from where you are standing, so there are no coordinates
 to offset and no floor to step to, and the controls stay away.
 
+## Colours and symbols
+
+The gear opens the settings readout; **colours and symbols** on it opens the
+editor.
+
+Sector colours come with a picker each, and every one starts at the colour the
+MUD itself uses — `Map.Definition` names all forty-one. That palette is also
+compiled into the plugin, so the defaults are right before the server has said
+anything and stay right on an install without Scouter, which is what fetches it.
+A live definition always wins over the compiled copy.
+
+Only the sectors this area actually contains are listed. Forty-one rows in a
+320px panel is a wall; the handful you have walked is a list.
+
+**Reset means reset.** A colour input cannot be blank, so each row carries its
+own `reset`, and there is a `back to the MUD's colours` for the lot. Either one
+*deletes* the override rather than writing today's value — so a sector you have
+not touched keeps following the server, and one you reset goes back to doing so.
+
+Flags get a glyph and a colour on the same page. The two are saved together
+because defining a flag replaces its whole definition; changing only the glyph
+would otherwise take the colour off with it.
+
+All of it lives in the map rather than in plugin settings. Plugin preferences do
+not survive a reinstall — the client keys them by a runtime id — and these are
+meant to outlast updates, so they go where the rooms go and travel with a map
+export.
+
 ## Room flags
 
 A flag is a tag on a room — `healing`, `quest`, `pk`, whatever you find worth
