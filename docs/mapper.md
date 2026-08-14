@@ -77,12 +77,16 @@ names a colour for all fifty-one of its styles — a green field, a grey city, a
 yellow road — so a room that is green on the server's local map is green here
 rather than in some second scheme invented for this panel.
 
-**It colours the border, not the room.** These are full-saturation terminal
-colours; filling with them turns the map into a grid of blocks and swallows the
-glyph, the `@` and anything else sitting on the room. The edge says the same
-thing and stays out of the way. A flag draws its border heavier than a sector's,
-so a room somebody marked wins the edge off a sector that merely happens to be
-there.
+**The ground is the fill, a flag is the border.** They mean different things and
+they have to read at the same time on the same room: a sector is what the room
+happens to sit on, a flag is something somebody deliberately marked. The fill is
+washed onto the panel background rather than used at full strength — these are
+terminal colours, and a room painted `#00ff00` leaves nothing readable on top of
+it.
+
+The room is **quartered**. Stairs own two corners, up top right and down bottom
+left; a flag's glyph takes one of the two that are left, up to two per room. The
+middle stays clear for the `@`.
 
 Hovering a room names its ground, which is usually the answer to "why is that
 one a different colour".
