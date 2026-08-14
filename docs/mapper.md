@@ -258,6 +258,34 @@ of its own to show, so it never replaces the `@`.
 
 The picker for both is on the **colours and symbols** page.
 
+### What a room goes on to
+
+Hover a room and the tooltip lists everything the map knows about it: name,
+vnum, area, ground, exits, unwalked directions, closed doors, flags. Two of
+those lines are about where it leads.
+
+**goes to** is read out of the room's own description. A tesseract bay
+advertises its destinations on a hologram, and LEGENDE has five bays in one
+section pointing five different places — without the list they are five
+identical rooms. Nothing needs to be typed; walk in once and the panel keeps
+it.
+
+**walked** is the other half: the special exits actually taken out of that
+room, with the vnum behind each one. The advertised list tells you where a
+teleport claims to go, this tells you where you have proved it goes.
+
+You can also leave your own note on a room:
+
+```
+dbmap note bay 1 -- Snake Way run    write it
+dbmap note                           read it back
+dbmap note clear                     remove it
+```
+
+The note shows on the tooltip and nowhere else. The client stores a note per
+room but its own map has no editor for one, so without this the field is
+write-only.
+
 Under the map is a **legend**: one entry per flag that draws a glyph, in that
 glyph's own colour. Once you are past two or three symbols it is the difference
 between a map and a puzzle. Flags with no symbol are not listed — a purely
