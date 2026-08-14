@@ -240,6 +240,8 @@ dbmap nudge w 3          or further -- useful after a teleport drops you
 dbmap nudge e s          move the room east of you, south
 dbmap nudge 10014 s 2    or by vnum, further
 dbmap nudge 10014 reset  put it back
+dbmap nudge 10004-10021 se 2   a whole block of them, as one
+dbmap nudge 10004-10021 reset  and back
 dbmap stretch n 2        push everything north of you outward
 dbmap relayout           lay the area out again from its exits
 dbmap respace <2-8>      spread out a map drawn at the old spacing
@@ -248,6 +250,19 @@ dbmap distance e 3       how far apart rooms sit, per axis
 ```
 
 A nudge is remembered on the room, so a later relayout keeps it.
+
+**The range form is for a cluster that came out in the wrong place.** Vnums are
+handed out in walk order within an area, so rooms you walked in one go are
+usually contiguous — `dbmap here` at each end gives you the two numbers. The
+block moves as a single unit and keeps its shape; nudging the rooms one at a
+time would have each shoving the next, because a single nudge pushes whatever
+is in its way.
+
+Only rooms of the area you are recording into are touched, so a range that
+strays into another area's numbers cannot drag somebody else's planet sideways.
+Landing on rooms outside the range is allowed — refusing would mean the tool
+stops working exactly when the map most needs rearranging — but it says how many
+did, and `dbmap audit` lists them.
 
 `dbmap view local` sidesteps the whole business — it reads no stored coordinate
 at all, so nothing in it can collide — but it only ever draws what is near you.
