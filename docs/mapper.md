@@ -60,7 +60,7 @@ but it only shows what is near you. `dbmap view` on its own says which is up.
 | `@` | the room you are in |
 | `?` | an exit seen but never walked, in the direction it leads |
 | `U` / `D` | stairs up and down, in the room's corners; red where unwalked |
-| 🚪 / 🔒 | a closed or locked door on the connection between two rooms |
+| ▬ | a door: a bar across the connection, square to it. Amber if it is locked |
 
 Rooms are coloured by terrain, using **the MUD's own palette**. `Map.Definition`
 names a colour for all fifty-one of its styles — a green field, a grey city, a
