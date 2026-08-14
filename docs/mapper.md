@@ -278,9 +278,14 @@ You can also leave your own note on a room:
 
 ```
 dbmap note bay 1 -- Snake Way run    write it
+dbmap note add cheapest hop out      another line on the end
 dbmap note                           read it back
 dbmap note clear                     remove it
 ```
+
+`dbmap note` on its own replaces whatever was there; `dbmap note add` puts your
+text on a new line under it, and the tooltip keeps the break. The one cost of
+that spelling is that a note cannot itself begin with the word *add*.
 
 The note shows on the tooltip and nowhere else. The client stores a note per
 room but its own map has no editor for one, so without this the field is
