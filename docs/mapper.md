@@ -360,6 +360,7 @@ Dying and being sent home are recognised on their own.
 dbmap audit              exits pointing nowhere, rooms sharing a square
 dbmap clean              special exits nothing declared as travel
 dbmap forget 10018 go    one room
+dbmap forget 10004-10021 go  a block of them
 dbmap forget found go    everything the last search listed
 dbmap drop <area> go     an area and its rooms
 dbmap clear all confirm  start over
@@ -367,6 +368,10 @@ dbmap clear all confirm  start over
 
 Everything destructive is a dry run until `go`, and names what it will touch
 first.
+
+`forget` takes the same range as `nudge`, and the same guard: only rooms of the
+area you are recording into. A range that strays into another area's numbers
+deletes nothing — and unlike a nudge, that one does not undo.
 
 ## What travels with the map
 
