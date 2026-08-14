@@ -21,12 +21,37 @@ appears twice.
 
 Then walk. Rooms, exits, doors and terrain record themselves.
 
+**Terrain colour needs Scouter installed and enabled.** It comes out of the
+server's `Map.Snapshot`, and the Mapper never asks for that package itself —
+Scouter owns that handshake, and two plugins negotiating the same one is how the
+map stayed empty for a week. Without it rooms and exits still record; the
+terrain colours below simply never arrive. `dbmap doors` says so when no
+snapshot has turned up.
+
+Doors are less fussy, because they have three ways in. The snapshot is one, but
+walking into a closed door and being told so is another — the MUD's own `The
+door is closed` is a plainer signal than working the geometry out of the local
+map's cells — and clicking one on the panel is the third. So doors still record
+without Scouter; they just record as you bump into them.
+
 ```
 dbmap            what the commands are
 dbmap diag       what it has recorded so far
+dbmap on         recording, which is where it starts out
+dbmap off        stop; the map keeps what it has
 ```
 
+Recording is remembered, so a `dbmap off` you forgot about is still off next
+login and the map quietly stops growing.
+
 The panel opens on its own. `dbmap hide` closes it, `dbmap show` brings it back.
+
+It draws one of two pictures. `dbmap view area` plots the area at its stored
+coordinates — the whole thing at once, which is what you want for getting your
+bearings. `dbmap view local` ignores those coordinates and lays the
+neighbourhood out fresh by walking exits from the room you are standing in:
+always readable, because a small neighbourhood almost never contradicts itself,
+but it only shows what is near you. `dbmap view` on its own says which is up.
 
 ## Reading the panel
 
@@ -63,13 +88,43 @@ read back as a plain exit. A single bad reading then decayed into a permanent
 faded doorway instead of going away. Doors are only ever recorded upward now:
 closed or locked, or nothing.
 
-`+` and `−` zoom. Clicking the area name in the footer opens a searchable list
-of every area the MUD's `areas` command knows, with the power range for each,
-so you can switch to somewhere before walking a single room of it.
+`+` and `−` zoom, and the gear between them swaps the map for a settings page:
+view mode, zoom, both distances, whether recording is on, the current area and
+how many rooms are in it, the totals recorded and the travel verbs. It is a
+readout — nothing on it changes anything yet, so the commands are still how you
+set them. Clicking the area name in the footer opens a searchable list of every
+area the MUD's `areas` command knows, with the power range for each, so you can
+switch to somewhere before walking a single room of it.
+
+## Floors, and looking somewhere else
+
+The map is three-dimensional and always was: going up or down records the new
+room a floor above or below rather than beside, and the panel draws one floor at
+a time. Which is the right answer while you are walking, and no help at all when
+you are standing in a basement wondering what is above you.
+
+The pad at the bottom right moves the view off yourself — four arrows for one
+room at a time, and the middle button to snap back. On an area with more than
+one floor, **▲** and **▼** appear in the top bar and step to the next floor that
+exists, not the next number: a tower with a basement and a roof and nothing
+between them is one press each way.
+
+While the view is off you, a marker in the corner says which floor you are
+looking at and that you have panned — click it to come home. Walking snaps it
+back on its own, because following you is what the panel is for; looking around
+is something you do while standing still.
+
+The `@` is only drawn where it actually is. Move the view to another floor and
+it goes, rather than following you into a picture you are not in.
+
+Both are area view only. `dbmap view local` lays the neighbourhood out by
+walking exits outward from where you are standing, so there are no coordinates
+to offset and no floor to step to, and the controls stay away.
 
 ## Finding your way
 
 ```
+dbmap here              this room's vnum and hash
 dbmap find barracks     search; results are clickable
 dbmap goto 10043        walk there
 dbmap path 10043        the route as a speedwalk you can send
@@ -82,8 +137,9 @@ diagonals — and splits it where a door is in the way:
 speedwalk eets ; open east ; speedwalk en
 ```
 
-`dbmap autodoor on` collapses that back into one walk if you have
-`config +autodoor` set, since bumping a door opens it.
+The split is not optional. Every closed door on the route gets an `open <dir>`
+in front of it, a locked one an `unlock <dir>` before that, and there is no
+setting to leave them out.
 
 ## When the map looks wrong
 
@@ -98,11 +154,15 @@ dbmap nudge 10014 s 2    or by vnum, further
 dbmap nudge 10014 reset  put it back
 dbmap stretch n 2        push everything north of you outward
 dbmap relayout           lay the area out again from its exits
+dbmap respace <2-8>      spread out a map drawn at the old spacing
 dbmap respace fit        take the slack out of a stretched map
 dbmap distance e 3       how far apart rooms sit, per axis
 ```
 
 A nudge is remembered on the room, so a later relayout keeps it.
+
+`dbmap view local` sidesteps the whole business — it reads no stored coordinate
+at all, so nothing in it can collide — but it only ever draws what is near you.
 
 ## Areas — set this first
 
@@ -117,7 +177,6 @@ pass for knowledge. Left alone, everything you walk piles into that one name —
 which is easy not to notice until there are two hundred rooms under it.
 
 ```
-areas                    the MUD's own list, which fills the picker
 dbmap area <name>        new rooms go here
 dbmap rename <name>      this area was never called that; brings its rooms
 dbmap take 4 go          pull the last 4 rooms into this area
@@ -126,7 +185,9 @@ dbmap moveto <area> go   move whatever 'find' just listed
 
 Clicking the area name at the foot of the panel opens the same list, searchable,
 with the power range for each — so you can switch to somewhere before walking a
-single room of it. Run `areas` once to fill it.
+single room of it. That list is compiled into the plugin, captured from the
+MUD's `areas` output on the day it was built, so it is full the first time you
+open it. Nothing here reads `areas` off the stream; typing it changes nothing.
 
 Crossing a special exit starts a provisional area; name it properly when you
 know what it is.

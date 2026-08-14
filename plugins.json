@@ -3,7 +3,7 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-14T01:23:43Z",
+  "generated": "2026-08-14T01:57:07Z",
   "pluginCount": 5,
   "plugins": [
     {
@@ -51,14 +51,14 @@
     {
       "id": "dbi-mapper",
       "name": "DB Infinity Mapper",
-      "version": "0.63.0",
+      "version": "0.64.0",
       "author": "Solao",
       "description": "Builds MudForge's map from the room output, for a MUD with no GMCP room data.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-mapper.json",
       "format": "json",
-      "sha256": "02ce7916333719eb8448118d59502a6ca684b62e28e381909752f459ca1949b8",
-      "size": 186133,
+      "sha256": "79116173f3c903445c515feebb70cb57c2c9b90d7d4fa744cddd49c4f50e76ca",
+      "size": 194120,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/mapper.md"
     },

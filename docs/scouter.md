@@ -36,31 +36,40 @@ also why this map works in Mudlet with no setup: Mudlet greets unprompted.
 
 | command | does |
 |---|---|
-| `dbmap` | the command list |
-| `dbmap zoom fit` / `dbmap zoom <6-34>` | fill the panel, or lock a size |
-| `dbmap opacity <0-100>` | `0` reads straight through it |
-| `dbmap frame` | keep or drop the server's own map border |
-| `dbmap gag` | keep the scouter's ASCII art out of the terminal |
-| `dbmap header` | the title bar |
-| `dbmap scan` | scanlines |
-| `dbmap show` / `dbmap hide` | the panel |
-| `dbmap redraw` | repaint now |
-| `dbmap enable` / `dbmap hello` | ask the server for the Map module again |
-| `dbmap diag` | what the plugin currently sees |
-| `dbmap raw` / `dbmap packages` | the GMCP payloads, and every package held |
-| `dbmap debug` | trace lines as they arrive |
+| `dbscout` | the command list |
+| `dbscout zoom fit` / `dbscout zoom <6-34>` | fill the panel, or lock a size |
+| `dbscout font +` / `dbscout font -` | nudge the locked size a step |
+| `dbscout opacity <0-100>` | `0` reads straight through it |
+| `dbscout frame` | keep or drop the server's own map border |
+| `dbscout gag` | keep the scouter's ASCII art out of the terminal |
+| `dbscout header` | the title bar |
+| `dbscout scan` | scanlines |
+| `dbscout show` / `dbscout hide` | the panel |
+| `dbscout redraw` | repaint now |
+| `dbscout enable` | ask the server for the Map module again |
+| `dbscout hello` | send another `Core.Hello` |
+| `dbscout diag` | what the plugin currently sees |
+| `dbscout raw` / `dbscout packages` | the GMCP payloads, and every package held |
+| `dbscout api [filter]` | every function bound in `_G`, optionally filtered |
+| `dbscout debug` | what a `scan` parsed, plus the skipped-hello note |
 
-The `-` and `+` buttons in the panel's bar lock a size; `dbmap zoom fit` hands
-it back to the fitter.
+The `-` and `+` buttons in the panel's bar lock a size; `dbscout zoom fit` hands
+it back to the fitter. `dbscout font +` and `dbscout font -` are the same nudge
+from the keyboard. `dbscout font <6-32>` is not — it writes the fallback
+declaration that the container-query rule overrides, so it moves a number
+nothing on screen reads. Use `zoom` for a size that sticks.
 
 ## If the panel stays empty
 
-`dbmap diag` answers most of it:
+`dbscout diag` answers most of it:
 
-- `negotiated=false` with `attempts=8/8` — the server never answered. Check
-  you're connected, then `dbmap hello`.
+- `negotiated=false` with `attempts=8/8` — the server never answered and the
+  tick has given up. Check you're connected, then `dbscout enable`: it's the
+  only thing that resets the counter and starts the schedule over.
+  `dbscout hello` sends another greeting but leaves the tick parked, so no
+  further `Core.Supports.Add` follows it.
 - `negotiated=true` but `cached definitions=0` — GMCP is up but the `Map`
-  module isn't sending. `dbmap enable`.
+  module isn't sending. `dbscout enable`.
 - `source=none` with a definition cached — the snapshot hasn't arrived yet;
   move a room.
 

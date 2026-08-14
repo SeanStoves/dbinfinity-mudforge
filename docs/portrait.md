@@ -1,6 +1,6 @@
 # DB Infinity Portrait
 
-Your character, drawn from two sources because neither is enough alone.
+Your character, drawn from three sources because none of them is enough alone.
 
 `char.vitals` arrives over GMCP and is pushed, so the Lifeforce and Energy bars
 stay honest while you fight. `score` carries race, sex, age, stats, armour,
@@ -8,17 +8,23 @@ kills and the rest, but only when you ask for it — so it's parsed once and kep
 Where the two overlap, GMCP wins, because `score` is a snapshot from whenever
 you last typed it.
 
+`look self` is the third, and nothing sends it for you. Type it once and the
+sheet gains your description — build, height, weight, hair, eyes — and the full
+list of what you are wearing. It is saved with the rest of the sheet.
+
 The `score` block stays in your scroll exactly as the MUD sent it. The only line
 that can be hidden is the stat prompt, and only if you ask — see `dbchar gag`.
 
 ## Two views
 
 **Portrait** — the avatar, your first name, rank, race, sex and age, the two
-bars, power level against base, zeni and alignment.
+bars, power level against base, the four stats, zeni and alignment, plus a pill
+for your position and another when current power has drifted off base.
 
-**Sheet** — behind the gear, everything `score` reports: stats, armour,
-position, carry weight, the full kill and spar record, crits, tokens, session
-gains and your EQ bonus.
+**Sheet** — behind the gear, everything `score` reports: the stats again,
+armour, position, carry weight, the full kill and spar record, crits, tokens,
+session gains and your EQ bonus. Type `look self` and your description and worn
+equipment join it.
 
 ## The power level box
 
@@ -57,9 +63,10 @@ last one's face, race and power level. Your avatar is kept per character too.
 Whoever was on last is what loads. If you swapped characters since, type
 `score` once and it corrects itself.
 
-The bars are the exception and stay empty until GMCP speaks, which takes a
-second or two. A saved bar reading full lifeforce on a character sitting at
-twenty percent is worse than an empty one.
+The bars are a partial exception. The raw vitals are not kept — GMCP pushes them
+within a second or two of connecting, and a two-day-old packet is worth nothing.
+But `score` reports LifeForce and Energy of its own, so the bars open reading
+whatever the saved sheet says and correct themselves the moment vitals arrive.
 
 ## The avatar
 
@@ -72,7 +79,6 @@ your own:
 
 ```
 dbchar avatar https://example.com/me.png
-dbchar avatar /home/you/Pictures/me.png
 dbchar avatar clear
 ```
 
@@ -144,7 +150,7 @@ up inside a CSS `url()`.
 | `dbchar show` / `dbchar hide` | the panel |
 | `dbchar sheet` / `dbchar portrait` | switch view without the gear |
 | `dbchar pl` | single figure, or base and current side by side |
-| `dbchar avatar <url or path>` / `clear` | your own image, or back to the race one |
+| `dbchar avatar <url>` / `clear` | your own image, or back to the race one |
 | `dbchar form <name> <url\|base> <text>` | a transformation portrait |
 | `dbchar forms` / `unform <name>` / `base` | list, drop, or reset by hand |
 | `dbchar name <name>` / `clear` | correct the name, or back to what `score` says |

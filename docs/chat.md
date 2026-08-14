@@ -18,7 +18,7 @@ with the channel it came from; the rest carry only their own.
 Turn any of them off under **setup**, or add your own:
 
 ```
-chat tab guild My Guild
+dbchat tab guild My Guild
 ```
 
 ## Captures
@@ -27,12 +27,16 @@ The built-in routing covers the channels this MUD ships with. Anything else you
 want split out, you define:
 
 ```
-chat capture senzu auction senzu bean
-chat capture mytell personal re:^Someone tells you
+dbchat capture senzu auction senzu bean
+dbchat capture mytell personal re:^Someone tells you
 ```
 
 Plain text matches anywhere in the line. Prefix the pattern with `re:` for a
 regular expression — that's JavaScript regex, not a Lua pattern.
+
+The tab is the channel's id, not the label on its button: `all`, `personal`,
+`ooc`, `chat`, `racetalk`, `auction`, `hardcore`, `event`, `custom`, or the id
+you gave `dbchat tab`. It is case-sensitive, so `Auct` gets you `no such tab`.
 
 Captures show up under **setup** with a `del` beside each one, and they survive
 a restart.
@@ -57,14 +61,14 @@ your output is worse than one you have to look at twice.
 
 | command | does |
 |---|---|
-| `chat` | the command list |
-| `chat show` / `chat hide` | the panel |
-| `chat setup` | the settings tab |
-| `chat clear` | empty every buffer |
-| `chat capture <name> <tab> <text>` | route a line |
-| `chat capture <name> <tab> re:<regex>` | the same, as a regex |
-| `chat tab <id> <Label>` | a tab of your own |
-| `chat diag` | what the plugin currently sees |
+| `dbchat` | the command list |
+| `dbchat show` / `dbchat hide` | the panel |
+| `dbchat setup` | the settings tab |
+| `dbchat clear` | empty every buffer |
+| `dbchat capture <name> <tab> <text>` | route a line |
+| `dbchat capture <name> <tab> re:<regex>` | the same, as a regex |
+| `dbchat tab <id> <Label>` | a tab of your own |
+| `dbchat diag` | what the plugin currently sees |
 
 Everything else is on the **setup** tab: which tabs are shown, what each rule
 does, the master gag, the text size, the backdrop and the panel opacity.
@@ -92,9 +96,8 @@ the most attacker-influenced text a plugin handles here, so nothing else gets
 turned into something you can click.
 
 The panel follows your terminal's font until you tell it not to. **Text size**
-under setup nudges it a point at a time between 8 and 28; the first nudge starts
-from whatever the terminal is currently at, so nothing jumps. It keeps 400 lines
-per tab.
+under setup is a dropdown — `follow terminal`, or a fixed size from 8px to 28px,
+which it jumps straight to. It keeps 400 lines per tab.
 
 ## Credits
 

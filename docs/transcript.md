@@ -9,21 +9,32 @@ work on it the way they do on a Mudlet or MushClient transcript.
 Nothing in this plugin is specific to any MUD. It ships in this repository
 because this is the repository that exists.
 
-## It needs a permission, and it fails quietly without one
+## It needs a permission, and it refuses to run without one
 
 **Desktop app only**, and the plugin's **File System Access** permission has to
 be on — plugin settings, Permissions tab.
 
 Without it, `io.open` still succeeds. It just writes to a pseudo-file inside the
-world file instead of to your disk.
+world file instead of to your disk. Which would be bad enough on its own, except
+appending to one of those rewrites the whole file through the storage engine —
+so every flush writes the session again, in full. Left alone for a day that took
+one IndexedDB store to 575 MB holding 2,646 copies of the same growing log.
+`mudlog purge` drops the stored copies once the permission is on.
 
 The plugin checks rather than assumes. On the first write it creates a
 throwaway file and deletes it again — `os.remove` returns true only with real
-filesystem access — and says so if the answer is no:
+filesystem access — and if the answer is no it turns logging off instead of
+falling back:
 
 ```
-[Transcript] File System Access is OFF -- nothing is reaching your disk.
+[Transcript 0.1.3] File System Access is OFF, so logging is off.
+[Transcript 0.1.3] Without it every append rewrites the whole transcript into
+[Transcript 0.1.3] the world storage, which grows without bound.
+[Transcript 0.1.3] Turn it on in this plugin's settings, Permissions tab, then 'mudlog on'.
 ```
+
+Nothing is written from that point. Queued lines are dropped rather than held,
+and it stays off until you run `mudlog on` yourself.
 
 `mudlog status` reports the same thing as `realFilesystem=`. If that says `no`,
 no other number in the status output means anything.
@@ -31,7 +42,7 @@ no other number in the status output means anything.
 ## Where the files go
 
 ```
-~/MudForge/plugin-files/mudlog/mudLogs/2026-08-13-Dragonball Infinity.txt
+~/MudForge/plugin-files/mudlog/mudLogs/2026-08-13-Dragonball-Infinity.txt
 ```
 
 The `~/MudForge/plugin-files/mudlog` part is fixed — it is where the client puts
@@ -42,8 +53,14 @@ a relative path, and the plugin cannot write outside it. The rest is yours:
 | folder | `mudLogs` | `mudlog folder <dir>` |
 | name | `{date}-{world}.txt` | `mudlog name <pattern>` |
 
-`{date}`, `{time}`, `{world}` and `{char}` are substituted. Anything else in the
-pattern is literal. A world named `../../etc` becomes a filename, not a path.
+`{date}`, `{time}` and `{world}` are substituted. Anything else in the pattern is
+literal. Whatever comes out is folded to something a filesystem will take —
+spaces collapse to hyphens, so a world named `Dragonball Infinity` lands as
+`Dragonball-Infinity`, and one named `../../etc` becomes a filename, not a path.
+
+`{char}` is offered in the pattern and in the config panel, but nothing in the
+plugin ever sets a character name, so it always resolves to the literal word
+`char`. Leave it out until something fills it in.
 
 The file opens on the first line rather than at load, because the world name is
 part of the path and isn't knowable until you connect.
@@ -69,8 +86,10 @@ colour back for a replay.
 | `mudlog folder <dir>` | where the files go |
 | `mudlog name <pattern>` | the filename pattern |
 | `mudlog open` | the folder, in your file manager |
+| `mudlog api` | which opener globals this build actually has, for when `open` finds none |
 | `mudlog colour` | keep or strip escape codes |
 | `mudlog stamp` | per-line timestamps |
+| `mudlog purge` | drop the transcript copies left in world storage |
 | `mudlog config` | the settings panel |
 
 ## If something looks wrong
