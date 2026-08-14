@@ -222,6 +222,17 @@ On the panel, a flag colour paints over the terrain colour, which is the order
 the client's own map uses. A flag's glyph only shows in a room that has nothing
 of its own to show, so it never replaces the `@`.
 
+**Pick a bright colour.** A flag fill is composited onto a near-black panel, so
+a dark one lands within a few points of the plain room it is meant to stand out
+from — the first `teleport` default was `#3a2a5e` and came out invisible. The
+picker is on the **colours and symbols** page, next to the sectors.
+
+Under the map is a **legend**: one entry per flag that draws a glyph, in that
+glyph's own colour. Once you are past two or three symbols it is the difference
+between a map and a puzzle. Flags with no symbol are not listed — a purely
+semantic tag has nothing to explain — and `dbmap legend` turns the strip off if
+you would rather have the room.
+
 ## Finding your way
 
 ```
