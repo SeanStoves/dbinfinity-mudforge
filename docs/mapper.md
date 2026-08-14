@@ -144,6 +144,11 @@ own `reset`, and there is a `back to the MUD's colours` for the lot. Either one
 *deletes* the override rather than writing today's value — so a sector you have
 not touched keeps following the server, and one you reset goes back to doing so.
 
+Saving stores only what you actually changed. The form submits every row whether
+you looked at it or not, so a value that still equals the server's is stored as
+nothing at all — otherwise opening this page once and pressing save would pin
+every colour and the map would quietly stop following the MUD.
+
 Flags get a glyph and a colour on the same page. The two are saved together
 because defining a flag replaces its whole definition; changing only the glyph
 would otherwise take the colour off with it.
