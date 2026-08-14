@@ -136,8 +136,11 @@ compiled into the plugin, so the defaults are right before the server has said
 anything and stay right on an install without Scouter, which is what fetches it.
 A live definition always wins over the compiled copy.
 
-Only the sectors this area actually contains are listed. Forty-one rows in a
-320px panel is a wall; the handful you have walked is a list.
+**Every sector is listed, walked or not.** The MUD has forty-one and the list is
+compiled in, so you can set a colour for somewhere before you have been there,
+and the page works on an install that never sees a GMCP packet. The ones your
+current area actually contains are marked `here`, and anything the server names
+that is not in the compiled list is added rather than hidden.
 
 **Reset means reset.** A colour input cannot be blank, so each row carries its
 own `reset`, and there is a `back to the MUD's colours` for the lot. Either one
