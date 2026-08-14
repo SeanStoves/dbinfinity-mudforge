@@ -280,6 +280,21 @@ open it. Nothing here reads `areas` off the stream; typing it changes nothing.
 Crossing a special exit starts a provisional area; name it properly when you
 know what it is.
 
+**Walk into a room the map already files somewhere else and the area follows
+you.** Teleports, recalls, being thrown out of a zone — none of them are a
+direction and none of them are `dbgo`, so nothing about the move says where you
+have ended up. The room does: it was filed under an area the last time you were
+there, and that is a lookup rather than a guess.
+
+Without it, a teleport left the panel drawing the area you had just left. The
+header named the room you were standing in, the footer named somewhere else, and
+the grid was empty apart from a single `@`, because only the recording area's
+rooms are ever drawn.
+
+A room is only ever in one area. Arriving somewhere never re-files it — the
+room's own record wins, and `dbmap take` and `dbmap moveto` remain the only ways
+to move one.
+
 ## Travel that is not a direction
 
 ```
