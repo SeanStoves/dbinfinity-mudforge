@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.003",
+    version     = "2026.08.15.004",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -1435,21 +1435,171 @@ local function unwrapVitals(v)
 end
 
 local function acceptVitals(data)
-    local src = unwrapVitals(data)
-    if not src then src = unwrapVitals(getGMCPData("char.vitals")) end
-    if not src then src = unwrapVitals(getGMCPData("char")) end
-    if not src then return false end
+    -- 'v', not 'src'. There is a file-scope table called src now, and a local
+    -- of the same name makes it unreachable from this whole function -- not
+    -- just after the declaration, but anywhere in it (sharp edge 15).
+    local v = unwrapVitals(data)
+    if not v then v = unwrapVitals(getGMCPData("char.vitals")) end
+    if not v then v = unwrapVitals(getGMCPData("char")) end
+    if not v then return false end
 
     vit = {
-        hit       = safeNum(src.hit),
-        maxHit    = safeNum(src.max_hit),
-        energy    = safeNum(src.energy),
-        maxEnergy = safeNum(src.max_energy),
-        basepl    = safeNum(src.basepl),
-        pl        = safeNum(src.pl),
+        hit       = safeNum(v.hit),
+        maxHit    = safeNum(v.max_hit),
+        energy    = safeNum(v.energy),
+        maxEnergy = safeNum(v.max_energy),
+        basepl    = safeNum(v.basepl),
+        pl        = safeNum(v.pl),
     }
     nego.done = true
     return true
+end
+
+-- char.info: { name, race, rank }.
+--
+-- The name is the important one. profileKey has only ever come from a parsed
+-- score header, so everything written before the first typed 'score' landed
+-- under whichever profile was stored last -- which is how a session that came
+-- up knowing nothing wrote an empty profile over a real one. GMCP names the
+-- character on connect, before any of that can happen.
+--
+-- Lowercased, because the profile key is and a key that varies by case forks a
+-- second empty profile for the same character.
+-- The whole Char tree, however it arrived.
+--
+-- Read once and indexed into, rather than a handler and an unwrap dance per
+-- package. The callback argument is not trustworthy for nested data -- proven
+-- for Map, where the leaf sometimes arrives and sometimes its parent does --
+-- so the store is asked as well and whichever answers with the tree wins.
+local function charTree(data)
+    local root = data
+    if type(root) == "table" and type(root.char) == "table" then root = root.char end
+    local function looksRight(t)
+        if type(t) ~= "table" then return false end
+        return type(t.info) == "table" or type(t.stats) == "table"
+            or type(t.equipment) == "table" or type(t.inventory) == "table"
+    end
+    if looksRight(root) then return root end
+    local stored = getGMCPData("char")
+    if type(stored) == "table" and type(stored.char) == "table" then
+        stored = stored.char
+    end
+    if looksRight(stored) then return stored end
+    return nil
+end
+
+local function acceptInfo(v)
+    if type(v) ~= "table" then return false end
+
+    -- One guard per field. A missing one arrives as undefined, which is truthy
+    -- and is not nil, so they are read independently rather than in pairs.
+    local got = false
+    local nm = v.name
+    if type(nm) == "string" and trimBoth(nm) ~= "" and trimBoth(nm) ~= "undefined" then
+        nm = trimBoth(nm)
+        -- The profile FIRST. useProfile swaps the whole sc table for the stored
+        -- one, so a name written before it is thrown away by it -- which is
+        -- exactly what happened, and the headline read 'Unknown' with the
+        -- profile correctly keyed on 'solao' right beside it.
+        local key = nm:lower()
+        if key ~= profileKey then
+            useProfile(key)
+            got = true
+        end
+        if sc.first ~= nm then
+            sc.first = nm
+            if not has(sc.name) then sc.name = nm end
+            got = true
+        end
+    end
+
+    if src.stats == "gmcp" then
+        local rc = v.race
+        if type(rc) == "string" and trimBoth(rc) ~= "" and trimBoth(rc) ~= "undefined"
+            and sc.race ~= trimBoth(rc) then
+            sc.race = trimBoth(rc)
+            got = true
+        end
+        local rk = v.rank
+        if type(rk) == "string" and trimBoth(rk) ~= "" and trimBoth(rk) ~= "undefined"
+            and sc.rank ~= trimBoth(rk) then
+            sc.rank = trimBoth(rk)
+            got = true
+        end
+    end
+
+    -- The sheet is gated on having seen a character at all, and now we have.
+    -- The rows GMCP cannot fill stay empty until a score is typed; row() drops
+    -- an empty one rather than printing a blank.
+    if got then scoreSeen = true end
+    return got
+end
+
+-- char.stats: the four attributes, the armour pair, zeni.
+--
+-- Two things here the score line does not carry at all. The armour MAXIMUM --
+-- score gives '10400, exceptionally crafted' and no ceiling, which is why that
+-- bar has read '--' since it was written. And a daily gains figure beside the
+-- session one; score only has SINCE LOGON.
+--
+-- The bases are integers here where the score line has decimals (126 against
+-- 126.23). Nothing has ever read the decimal: the parser puts it in
+-- sc["strength-real"] and no renderer touches it. So this loses nothing on
+-- screen.
+local function acceptStats(v)
+    if src.stats ~= "gmcp" then return false end
+    if type(v) ~= "table" then return false end
+
+    local got = false
+    -- Nested two deep. 'v.strength.current' throws if strength is missing
+    -- rather than yielding nil, and a guard cannot share the expression with
+    -- the call it guards (sharp edge 16), so the table is taken first.
+    for _, name in ipairs({ "strength", "speed", "spirit", "fortitude" }) do
+        local pair = v[name]
+        if type(pair) == "table" then
+            local cur = safeNum(pair.current)
+            if cur ~= nil and sc[name] ~= cur then
+                sc[name] = cur
+                got = true
+            end
+            local base = safeNum(pair.base)
+            if base ~= nil then sc[name .. "-real"] = base end
+        end
+    end
+
+    local ar = v.armor
+    if type(ar) == "table" then
+        local cur = safeNum(ar.current)
+        local max = safeNum(ar.max)
+        if cur ~= nil and sc.armorVal ~= cur then
+            sc.armorVal = cur
+            got = true
+        end
+        -- The ceiling the prompt and the score line never had.
+        if max ~= nil and max > 0 and sc.armorMax ~= max then
+            sc.armorMax = max
+            got = true
+        end
+    end
+
+    local zeni = safeNum(v.zeni)
+    if zeni ~= nil and sc.zeni ~= zeni then
+        sc.zeni = zeni
+        got = true
+    end
+
+    local gains = v.gains
+    if type(gains) == "table" then
+        local ses = gains.session
+        if type(ses) == "table" then
+            local gp = safeNum(ses.pl)
+            if gp ~= nil then sc.gainedPl = gp end
+            local gk = safeNum(ses.ki)
+            if gk ~= nil then sc.gainedKi = gk end
+        end
+    end
+
+    return got
 end
 
 -- Whichever of our plugins connects first does the handshake. Add merges, and
@@ -2213,6 +2363,10 @@ local function portraitBody()
     -- score stands in only when the toggle allows it: 'prompt' pins the bar to
     -- the live %z/%Z tokens and nothing staler
     if src.bars ~= "prompt" and not has(arCur) then arCur = sc.armorVal end
+    -- GMCP is the only thing that has ever supplied an armour ceiling. Without
+    -- one the bar fell back to reading full, which is the same picture at 100
+    -- armour as at 10,400.
+    if src.bars ~= "prompt" and not has(arMax) then arMax = sc.armorMax end
     if has(arCur) and not has(arMax) then arMax = arCur end
     add(barOrDash("Armor", arCur, arMax, "ar", false))
     -- the ratio bar is what the numeric mode replaces, so it goes with it
@@ -2340,6 +2494,76 @@ local isCont = {}
 local anaOf = {}
 local anaOpen = {}
 local itemStale = { inv = true, eq = true, cont = true }
+
+-- char.equipment and char.inventory, straight into the two lists.
+--
+-- These replace the capture wholesale rather than editing it: GMCP sends the
+-- whole list every time, so there is nothing to reconcile and no 'You get X'
+-- line to track. That is most of the item machinery's reason for existing.
+--
+-- Row format matches what the capture produced, because the renderer splits it
+-- back apart: equipment is '<slot> Name', inventory is bare. A layer becomes
+-- '[16]' on the end, which is how the MUD itself prints it:
+--
+--     Class I Battle Armor [16]
+--
+-- What is LOST going this way is the MUD's own flag prefix -- '(Glowing) Proof
+-- of Tranquility' arrives as 'Proof of Tranquility'. Worth knowing; the toggle
+-- is there for anyone who would rather have it.
+local function gearRows(list, withSlot)
+    local rows = {}
+    if type(list) ~= "table" then return nil end
+    -- Two-value return, into locals. Nesting it hands the pair across.
+    local arr, n = normArray(list.items)
+    if n == 0 and type(list.items) ~= "table" then return nil end
+
+    for i = 1, n do
+        local it = arr[i]
+        if type(it) == "table" then
+            local nm = it.name
+            if type(nm) == "string" and trimBoth(nm) ~= ""
+                and trimBoth(nm) ~= "undefined" then
+                nm = trimBoth(nm)
+                local layer = safeNum(it.layer)
+                if layer ~= nil and layer > 0 then nm = nm .. " [" .. layer .. "]" end
+                -- The MUD's own spelling for a stack has never been seen in a
+                -- transcript, so this one is ours rather than a guess at theirs.
+                local count = safeNum(it.count)
+                if count ~= nil and count > 1 then nm = nm .. " (x" .. count .. ")" end
+                if withSlot then
+                    local slot = it.slot
+                    if type(slot) == "string" and trimBoth(slot) ~= "" then
+                        nm = "<" .. trimBoth(slot) .. "> " .. nm
+                    end
+                end
+                rows[#rows + 1] = nm
+            end
+        end
+    end
+    return rows
+end
+
+local function acceptGear(root)
+    if src.items ~= "gmcp" then return false end
+    if type(root) ~= "table" then return false end
+
+    local got = false
+    local eq = gearRows(root.equipment, true)
+    if eq ~= nil then
+        itemList.eq = eq
+        itemSeen.eq = true
+        itemStale.eq = false
+        got = true
+    end
+    local inv = gearRows(root.inventory, false)
+    if inv ~= nil then
+        itemList.inv = inv
+        itemSeen.inv = true
+        itemStale.inv = false
+        got = true
+    end
+    return got
+end
 local itemsGag = false
 
 -- The word a MUD command can address this item by, and nothing else reaches
@@ -3379,8 +3603,30 @@ onTarget = function(data)
     if type(t) ~= "table" then return end
 
     local nm = t.name
-    if type(nm) ~= "string" or nm == "" then nm = nil end
+    if type(nm) ~= "string" or nm == "" or nm == "undefined" then nm = nil end
     local hp = safeNum(t.hit)
+
+    -- NO OPPONENT. The MUD sends the whole packet with every field null when
+    -- there is nothing to fight:
+    --
+    --     "target": { "name": null, "hit": null, "max_hit": null, "race": null }
+    --
+    -- Each field was being read correctly and then nothing happened with the
+    -- answer: foe.hit is set here and was cleared nowhere in the file, and the
+    -- bar prefers it over the prompt's figure. So the first GMCP target of a
+    -- session pinned an enemy bar on the panel and left it there -- the
+    -- prompt's clear and the stale timer only ever touched foe.val.
+    --
+    -- A null name with no health beside it is the end of a fight, and it says
+    -- so more plainly than any line does.
+    if nm == nil and hp == nil then
+        if foe.name ~= nil or foe.hit ~= nil then
+            foe.name, foe.hit, foe.peak, foe.max, foe.race = nil, nil, nil, nil, nil
+            foe.why = "char.target came back empty"
+            safeRender()
+        end
+        return
+    end
 
     -- A different thing is a different fight, so the peak starts again. Without
     -- this the bar would read against whatever the last target's health was.
@@ -5257,9 +5503,9 @@ function init()
             -- merely empty, and stopping there is what left the old one
             -- unreachable; whichever actually has something wins.
             local rec, who = nil, ""
-            for _, src in ipairs({ "global", "legacy" }) do
+            for _, from in ipairs({ "global", "legacy" }) do
                 local late = nil
-                if src == "global" then
+                if from == "global" then
                     pcall(function() late = loadTable("dbi-portrait-prefs", "global") end)
                 else
                     -- world file: only readable once a world is open, which is
@@ -5313,17 +5559,41 @@ function init()
     pcall(applyGag)
     pcall(armPrompt)
 
-    local function onVitals(data)
+    -- One handler for the tree. Whichever package fired, everything under it
+    -- is re-read -- they arrive together and a partial refresh would leave the
+    -- panel showing one packet's idea of the character and another's numbers.
+    -- ONE handler for the whole tree, subscribed under every spelling.
+    --
+    -- Not one per package: the client keys its subscriptions by package name,
+    -- so registering a second callback for "char" REPLACES the first. Vitals
+    -- and the tree both wanted that name, and the suite caught the vitals
+    -- handler disappearing the moment they both asked for it.
+    --
+    -- Everything is re-read on any of them, because they arrive together and a
+    -- partial refresh would leave the panel showing one packet's character
+    -- beside another's numbers.
+    local function onChar(data)
         local ok, err = pcall(function()
-            if acceptVitals(data) then safeRender() end
+            local drew = acceptVitals(data)
+            local root = charTree(data)
+            if type(root) == "table" then
+                if acceptInfo(root.info) then drew = true end
+                if acceptStats(root.stats) then drew = true end
+                if acceptGear(root) then drew = true end
+            end
+            if drew then safeRender() end
         end)
-        if not ok then print(TAG .. "vitals error: " .. tostring(err)) end
+        if not ok then print(TAG .. "char error: " .. tostring(err)) end
     end
 
-    -- Both spellings. Which one the client fires for a nested package is not
-    -- documented, and subscribing twice costs nothing.
-    onGMCPUpdate("char.vitals", onVitals)
-    onGMCPUpdate("char", onVitals)
+    for _, pkg in ipairs({ "char", "Char",
+                           "char.vitals", "Char.Vitals",
+                           "char.info", "Char.Info",
+                           "char.stats", "Char.Stats",
+                           "char.equipment", "Char.Equipment",
+                           "char.inventory", "Char.Inventory" }) do
+        onGMCPUpdate(pkg, onChar)
+    end
 
     -- char.target: { name, hit, race }. More than the prompt ever gave -- it
     -- names the thing -- and no trigger needed to read it. Both spellings,
