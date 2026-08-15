@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "0.50.0",
+    version     = "0.51.0",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -131,7 +131,12 @@ local vit = nil
 -- prompt has and does not need a trigger to read. It has no max_hit though, so
 -- the peak seen since this target appeared stands in for one -- self-correcting,
 -- since the first reading of a fresh target is its highest.
-local foe = { val = nil, at = 0, saw = "", got = "", why = "",
+--   src  where the enemy bar and the armour bar take their reading from:
+--        "gmcp" prefers char.target / score, "prompt" pins both to the
+--        prompt's own tokens. A settings toggle, because this MUD's GMCP
+--        and its prompt do not always agree and the player knows which one
+--        they trust.
+local foe = { val = nil, at = 0, saw = "", got = "", why = "", src = "gmcp",
               name = nil, hit = nil, peak = nil, race = nil, max = nil,
               -- seconds before an unrefreshed opponent is dropped; the backstop
               -- behind the fight-end line and the no-opponent prompt
@@ -1953,7 +1958,10 @@ local function foeBar()
     if ceiling == nil then ceiling = safeNum(foe.peak) end
 
     local pct, num = nil, nil
-    if safeNum(foe.hit) and ceiling and ceiling > 0 then
+    -- src 'prompt' pins the bar to the prompt's own percentage. GMCP keeps
+    -- being collected -- the name still labels the bar -- but its numbers do
+    -- not drive it.
+    if foe.src ~= "prompt" and safeNum(foe.hit) and ceiling and ceiling > 0 then
         pct = (foe.hit / ceiling) * 100
         num = withCommas(foe.hit)
         -- Shown against a known maximum, the pair is worth printing. Against a
@@ -2124,7 +2132,9 @@ local function portraitBody()
     -- it does not. Score gives the figure and no ceiling, so the bar reads full
     -- rather than empty -- the same way Ki does with '%m' and no '%M'.
     local arCur, arMax = charState.ar, charState.arMax
-    if not has(arCur) then arCur = sc.armorVal end
+    -- score stands in only when the source toggle allows it: 'prompt' pins
+    -- the bar to the live %z/%Z tokens and nothing staler
+    if foe.src ~= "prompt" and not has(arCur) then arCur = sc.armorVal end
     if has(arCur) and not has(arMax) then arMax = arCur end
     add(barOrDash("Armor", arCur, arMax, "ar", false))
     -- the ratio bar is what the numeric mode replaces, so it goes with it
@@ -2802,8 +2812,14 @@ local function feedAuction(clean)
         or capOf(clean, "^Auction:%s+(.+): going once")
         or capOf(clean, "^Auction:%s+(.+): going twice")
     if fresh ~= nil then
-        charState.auction = fresh
-        charState.auctionSrc = "chan"
+        -- The prompt owns the pill whenever it carries %o (the player's rule:
+        -- auction always reads off the prompt). The channel still fills it in
+        -- for a prompt with no %o, and the sold/removed lines above still
+        -- clear it for everyone.
+        if charState.auctionSrc ~= "prompt" then
+            charState.auction = fresh
+            charState.auctionSrc = "chan"
+        end
         return true
     end
     return false
@@ -3022,6 +3038,9 @@ local function cfgBody()
     add('<div class="crow"><span class="ck">power level</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="plmode">'
         .. plMode .. "</span></div>")
+    add('<div class="crow"><span class="ck">armor + enemy from</span>')
+    add('<span class="tb" data-mud-action="cfgtog" data-mud-data="src">'
+        .. foe.src .. "</span></div>")
 
     add('<div class="crow"><span class="ck">text size</span>')
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font-">-</span>')
@@ -3510,6 +3529,7 @@ local function saveSettings()
             fontScale = tostring(fontScale),
             gagPrompt = gagPrompt and "yes" or "no",
             itemsGag = itemsGag and "yes" or "no",
+            srcMode = foe.src,
             containers = isCont,
             panelAlpha = tostring(panelAlpha),
             profiles = keep,
@@ -3835,8 +3855,6 @@ local function promptFeed(m, captures, line)
                     -- Trimmed, because the capture is greedy now: a token at the
                     -- end of a line takes the trailing spaces with it.
                     word = trimBoth(word)
-                    local fromChan = role == "auction"
-                        and charState.auctionSrc == "chan"
                     -- A token the MUD never expanded. It echoes the format
                     -- back when you set or query a prompt, and that echo is
                     -- prompt-shaped enough to match:
@@ -3848,7 +3866,30 @@ local function promptFeed(m, captures, line)
                     -- this already -- promptNum refuses anything that is not a
                     -- figure -- so it is only the word tokens that leak.
                     local unexpanded = #word == 2 and word:sub(1, 1) == "%"
-                    if word == "" or word == "N/A" or unexpanded then
+
+                    -- A cross-format MISREAD, refused outright. The fight
+                    -- prompt's line can match the non-fight format when only
+                    -- one of the two has been learned: 'Auct:[%o]' compiles to
+                    -- a greedy capture with a literal ']' after it, and run
+                    -- against '... Auct:[socks] Foe:[42.5]' the capture
+                    -- backtracks to 'socks] Foe:[42.5' -- brackets, the foe,
+                    -- the lot -- and THAT sat in the footer as an auction item
+                    -- saying 'Foe'. An item name never carries a bracket ('<<
+                    -- Orb >>' is angle brackets, which are different
+                    -- characters), and never names the Foe: token. Neither set
+                    -- nor cleared: the pill keeps what it correctly knew.
+                    local misread = false
+                    if role == "auction" then
+                        if word:find("[", 1, true) or word:find("]", 1, true) then
+                            misread = true
+                        elseif word:lower():find("foe:", 1, true) then
+                            misread = true
+                        end
+                    end
+
+                    if misread then
+                        got = got  -- explicitly: no write, no clear
+                    elseif word == "" or word == "N/A" or unexpanded then
                         -- The token IS on this prompt and has nothing to
                         -- report, so whatever it held is over. Leaving the old
                         -- value stood the auction pill in the footer until the
@@ -3862,10 +3903,14 @@ local function promptFeed(m, captures, line)
                             charState[role] = nil
                             got = true
                         end
-                        if fromChan then charState.auctionSrc = nil end
-                    elseif not fromChan then
+                        if role == "auction" then charState.auctionSrc = nil end
+                    else
+                        -- The prompt always wins the auction pill (the player's
+                        -- rule). The channel only fills it for a prompt that
+                        -- carries no %o at all -- see feedAuction.
                         charState[role] = word
                         got = true
+                        if role == "auction" then charState.auctionSrc = "prompt" end
                     end
                 end
             else
@@ -4149,6 +4194,8 @@ local function makeWidget()
                 itemsGag = not itemsGag
             elseif arg == "plmode" then
                 if plMode == "nums" then plMode = "bar" else plMode = "nums" end
+            elseif arg == "src" then
+                if foe.src == "prompt" then foe.src = "gmcp" else foe.src = "prompt" end
             end
             safeRender(true)
             saveSettings()
@@ -4331,7 +4378,8 @@ local function printDiag()
     print(TAG .. "last STRENGTH line: [" .. tostring(pd.scoreSaw) .. "]")
     local foeAge = "-"
     if foe.val then foeAge = tostring(math.floor(os.clock() - foe.at)) end
-    print(TAG .. "plMode=" .. plMode .. " foe=" .. tostring(foe.val) .. " foeAge=" .. foeAge)
+    print(TAG .. "plMode=" .. plMode .. " foe=" .. tostring(foe.val) .. " foeAge=" .. foeAge
+        .. " src=" .. tostring(foe.src))
     print(TAG .. "last opponent line: [" .. tostring(foe.saw) .. "]")
     print(TAG .. "read off it: " .. tostring(foe.got)
         .. "  held at clock " .. tostring(foe.at))
@@ -4940,6 +4988,7 @@ function init()
     if gp == "yes" then gagPrompt = true end
 
     if p.itemsGag == "yes" then itemsGag = true end
+    if p.srcMode == "prompt" then foe.src = "prompt" end
 
     -- Stored data is still data: a table written by an older build, or edited
     -- by hand, has never been through itemPhrase. Letters, digits and single
