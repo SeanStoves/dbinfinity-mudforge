@@ -3,8 +3,8 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-15T04:36:06Z",
-  "pluginCount": 5,
+  "generated": "2026-08-15T05:03:55Z",
+  "pluginCount": 6,
   "plugins": [
     {
       "id": "dbi-map",
@@ -23,14 +23,14 @@
     {
       "id": "dbi-portrait",
       "name": "DB Infinity Portrait",
-      "version": "0.43.0",
+      "version": "0.44.0",
       "author": "Solao",
       "description": "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-portrait.json",
       "format": "json",
-      "sha256": "1e6cc5eac0df9c88e71f60de8d714a2ac511a224f802e40eee7846658da6c2e7",
-      "size": 230893,
+      "sha256": "267f7ee0a25cad2d41b44520abf068b7a8e2f0a20b35831340571d33fddd9224",
+      "size": 231768,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/portrait.md"
     },
@@ -47,6 +47,20 @@
       "size": 45803,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/chat.md"
+    },
+    {
+      "id": "dbi-codex",
+      "name": "DB Infinity Codex",
+      "version": "0.27.0",
+      "author": "Solao",
+      "description": "A searchable record of items and mobs: what they are, and where you found them.",
+      "category": "widgets",
+      "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-codex.json",
+      "format": "json",
+      "sha256": "bb818655a7603d65dbbb360a856495369f08b2b84130a7894285c11542be5c1b",
+      "size": 99856,
+      "license": "MIT",
+      "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/codex.md"
     },
     {
       "id": "dbi-mapper",
