@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.006",
+    version     = "2026.08.15.007",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -1250,11 +1250,11 @@ local function notePrompt(clean)
         local at = low:gsub("^%(", "")
         if at:sub(1, 10) == "lifeforce:" then
             prompt.tag = "LifeForce:"
-            return true, true
+            return true
         end
         if at:sub(1, 3) == "lf:" then
             prompt.tag = "LF:"
-            return true, true
+            return true
         end
     end
 
