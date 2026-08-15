@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.15.000",
+    version     = "2026.08.15.001",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -898,10 +898,23 @@ local function feedRoom(clean, raw)
     -- a player standing there is not a mob, and neither is a corpse
     if clean:find("corpse", 1, true) then return false end
 
+    -- The room is not always known the instant you walk in. here() needs BOTH
+    -- getPlayerRoom and getMapRoom to answer, and while a move is still
+    -- settling either can decline -- so this used to return, the line printed
+    -- plain, and the [scan] link only turned up once you typed 'look'. That is
+    -- exactly how it was reported, and it is not the room's emotes: those
+    -- arrive after the line and cannot reach back.
+    --
+    -- The RECORD needs a room; there is nowhere to file a sighting without
+    -- one. The OFFER does not. So a mob seen before the map has caught up
+    -- still gets its link, and the sighting is picked up on the next line that
+    -- knows where it is.
     local spot = here()
-    if not spot then return false end
-    sawMobs = sawMobs + 1
-    local rec = noteMob(who, spot, nil)
+    local rec = nil
+    if spot then
+        sawMobs = sawMobs + 1
+        rec = noteMob(who, spot, nil)
+    end
 
     -- The line itself, with a scan link on the end of it.
     --
@@ -912,7 +925,7 @@ local function feedRoom(clean, raw)
     --
     -- Keyed on the ROOM. The same name in the next room along may be a
     -- different power, so each room is worth its own reading and its own offer.
-    if not linkOn or type(rec) ~= "table" then return true end
+    if not linkOn then return true end
 
     -- Known: put the figure on the line. Every time, not once -- the whole
     -- point is seeing what you are about to walk into. utilprint is plain
@@ -923,7 +936,8 @@ local function feedRoom(clean, raw)
     local shown = recolour(raw)
     if shown == nil then shown = clean end
 
-    local known = safeNum(rec.pl)
+    local known = nil
+    if type(rec) == "table" then known = safeNum(rec.pl) end
     if known then
         local ok = pcall(function()
             utilprint(shown .. "  $Y(" .. commas(known) .. ")$n")
@@ -935,9 +949,25 @@ local function feedRoom(clean, raw)
     -- Unknown: the same line with something to click on the end of it. Once per
     -- room -- the same name next door may be a different power, and that room
     -- is worth its own reading.
-    local key = mobKey(spot.area, rec.name, nil) .. "@" .. tostring(spot.num)
+    -- Named from the record when there is one, from the line when there is
+    -- not. Same cleaning either way, so the two agree on the keyword.
+    local name = cleanName(who)
+    if type(rec) == "table" and type(rec.name) == "string" then name = rec.name end
+    if name == "" then return true end
+
+    -- '?' for a room that has not resolved. It means the offer made on the way
+    -- in and the one made after a 'look' are different keys, so the link can
+    -- appear twice for one mob -- which is the right way round: showing it
+    -- twice costs a line, showing it never costs the reading.
+    local at = "?"
+    local area = ""
+    if spot then
+        at = tostring(spot.num)
+        area = spot.area
+    end
+    local key = mobKey(area, name, nil) .. "@" .. at
     if offered[key] then return true end
-    local word = keyword(rec.name)
+    local word = keyword(name)
     if word == "" then return true end
     offered[key] = true
 
