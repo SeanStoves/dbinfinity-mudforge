@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-map",
     name        = "DB Infinity Scouter",
-    version     = "0.9.0",
+    version     = "2026.08.15.000",
     author      = "Solao",
     description = "Dragonball Infinity's GMCP map, rendered as a scouter readout.",
     settings    = { saveState = true },
@@ -366,11 +366,17 @@ local function normArray(v)
     local n = 0
     if type(v) ~= "table" then return out, 0 end
 
-    for _, item in ipairs(v) do
-        n = n + 1
-        out[n] = item
+    -- Checked BEFORE trusting ipairs. A 0-indexed array has something at [0],
+    -- and ipairs starts at 1 -- so it walks from the SECOND element, drops the
+    -- first, and because it found some the fallback below never runs. Three
+    -- rooms came back as two that way, silently.
+    if v[0] == nil then
+        for _, item in ipairs(v) do
+            n = n + 1
+            out[n] = item
+        end
+        if n > 0 then return out, n end
     end
-    if n > 0 then return out, n end
 
     local tmp = {}
     local minK = nil

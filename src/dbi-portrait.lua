@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.004",
+    version     = "2026.08.15.005",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -287,11 +287,17 @@ local function normArray(v)
     local n = 0
     if type(v) ~= "table" then return out, 0 end
 
-    for _, item in ipairs(v) do
-        n = n + 1
-        out[n] = item
+    -- Checked BEFORE trusting ipairs. A 0-indexed array has something at [0],
+    -- and ipairs starts at 1 -- so it walks from the SECOND element, drops the
+    -- first, and because it found some the fallback below never runs. Three
+    -- rooms came back as two that way, silently.
+    if v[0] == nil then
+        for _, item in ipairs(v) do
+            n = n + 1
+            out[n] = item
+        end
+        if n > 0 then return out, n end
     end
-    if n > 0 then return out, n end
 
     local tmp, minK, maxK = {}, nil, nil
     for k, item in pairs(v) do

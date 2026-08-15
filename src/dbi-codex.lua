@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.15.001",
+    version     = "2026.08.15.002",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -127,6 +127,16 @@ local SCAN_WAIT = 8
 -- Mobs already offered a scan link this session, so walking a corridor of nine
 -- elite warriors does not print nine invitations to scan the same thing.
 local offered = {}
+
+-- The word that actually scanned a given mob, learned rather than guessed.
+-- Keyed on the cleaned name, because the working keyword is a property of the
+-- mob and not of the room it happened to be standing in.
+local scanKw = {}
+
+-- The last scan link this plugin offered: which mob, which word, and which
+-- candidate that was. If the MUD answers "They aren't here." the next word is
+-- tried, and whichever finally works is kept.
+local tried = { name = "", word = "", idx = 0, at = 0 }
 local linkOn = true
 
 -- The vnum we were standing in when the last line came through. Nothing else
@@ -260,16 +270,32 @@ local SKIP = {
     some = true, ["in"] = true, ["on"] = true,
 }
 
--- The first word worth typing. The transcript shows partial names work --
--- 'scan war', 'scan eng' -- so one distinctive word is enough, and the first
--- one is more distinctive than the last: 'A captain of Frieza's army' is a
--- captain, not an army.
-local function keyword(s)
+-- Every word worth typing, in the order worth trying.
+--
+-- The first is usually right and the transcript says so: across three days,
+-- 'ginyu', 'captain', 'elite', 'giga', 'zeta', 'starship', 'legende' and
+-- 'dissection' all scanned their mob, and every one of them is the first word
+-- of the name. It is also the more DISTINCTIVE end -- 'A captain of Frieza's
+-- army' is a captain, not an army, and Giga, Zeta and Dissection Android would
+-- all collapse onto 'android' if the last word won.
+--
+-- But it is not always right. 'A seasoned soldier' answers to 'soldier', not
+-- to 'seasoned'. So the rest of the words are kept as fallbacks, tried in turn
+-- when the MUD says the first one is not here, and the one that works is
+-- remembered against the mob.
+local function keywords(s)
+    local out = {}
     for w in stripTags(s):gmatch("%a+") do
         local low = w:lower()
-        if not SKIP[low] and #low > 1 then return low end
+        if not SKIP[low] and #low > 1 then out[#out + 1] = low end
     end
-    return ""
+    return out
+end
+
+local function keyword(s)
+    local words = keywords(s)
+    if #words == 0 then return "" end
+    return words[1]
 end
 
 -- 1000000 -> 1,000,000. Read off the panel a hundred times a night, and an
@@ -760,6 +786,40 @@ local function feedScan(clean)
     if who ~= nil then
         scan.who = cleanName(who)
         scan.at = os.time()
+        -- Whatever word we last offered got an outline, so it is the right one
+        -- for this mob. Remembered against the name, so the next offer uses it
+        -- instead of guessing again.
+        if tried.word ~= "" and keyOf(tried.name) == keyOf(scan.who) then
+            scanKw[keyOf(scan.who)] = tried.word
+            tried.word = ""
+        end
+        return true
+    end
+
+    -- "They aren't here." after a scan we offered means the WORD was wrong,
+    -- not that the mob left -- we printed its name a moment ago. Try the next
+    -- candidate. 'A seasoned soldier' is the case this exists for: it answers
+    -- to 'soldier' and not to 'seasoned', where nine other mobs in the same
+    -- transcript answer to their first word.
+    --
+    -- Bounded: only when we offered one, only within the window a scan is
+    -- allowed to answer in, and only forward through the candidate list.
+    if clean == "They aren't here." and tried.word ~= "" and tried.idx > 0
+        and os.time() - tried.at <= SCAN_WAIT then
+        local words = keywords(tried.name)
+        local nxt = words[tried.idx + 1]
+        tried.idx = tried.idx + 1
+        if type(nxt) == "string" and nxt ~= "" then
+            tried.word = nxt
+            tried.at = os.time()
+            local ok = pcall(function() send("scan " .. nxt) end)
+            if ok then
+                print(TAG .. "'" .. tried.name .. "' does not answer to that; "
+                    .. "trying '" .. nxt .. "'.")
+            end
+        else
+            tried.word = ""
+        end
         return true
     end
 
@@ -967,9 +1027,19 @@ local function feedRoom(clean, raw)
     end
     local key = mobKey(area, name, nil) .. "@" .. at
     if offered[key] then return true end
-    local word = keyword(name)
+
+    -- A word that has worked for this mob before beats the guess.
+    local word = scanKw[keyOf(name)]
+    local idx = 0
+    if type(word) ~= "string" or word == "" then
+        local words = keywords(name)
+        if #words == 0 then return true end
+        word = words[1]
+        idx = 1
+    end
     if word == "" then return true end
     offered[key] = true
+    tried.name, tried.word, tried.idx, tried.at = name, word, idx, os.time()
 
     -- The line stays plain and only the label is clickable, in the same place
     -- the figure sits for something already read.
