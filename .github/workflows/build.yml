@@ -1,0 +1,63 @@
+name: build
+
+# Edit a plugin's Lua -- here, on github.com, or by pushing from the private
+# repo -- and this turns it back into the bundle and index the client installs
+# from. Only the plugin that actually changed gets a new version; the others
+# are rewritten byte for byte and their hashes do not move.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**.lua"
+      - "tools/pack.py"
+  # and by hand, for when a build needs forcing
+  workflow_dispatch:
+
+# The job commits the rebuilt bundles back, so it needs to be able to write.
+permissions:
+  contents: write
+
+concurrency:
+  # Two pushes in quick succession would otherwise race to commit the index,
+  # and the loser rebases onto a version it did not compute.
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rebuild the bundles and the index
+        run: python3 tools/pack.py
+
+      - name: Commit, if anything moved
+        run: |
+          set -eu
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "nothing changed; no commit"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Name the plugins that moved, so the history says what shipped
+          # rather than just that something did.
+          moved=$(git diff --name-only -- src | sed 's|^src/||; s|\.lua$||' | paste -sd', ')
+          [ -n "$moved" ] || moved="repackaged"
+
+          git add -A
+          # [skip ci] matters: this commit touches src/*.lua to write the new
+          # version line, which is one of the paths that triggers this workflow.
+          #
+          # No heredoc for the body -- its terminator would sit indented inside
+          # this YAML block and bash will not accept that.
+          versions=$(python3 -c "import json;d=json.load(open('plugins.json'));print(chr(10).join(p['id']+' '+p['version'] for p in d['plugins']))")
+          git commit -m "Release ${moved} [skip ci]" -m "$versions"
+          git push
