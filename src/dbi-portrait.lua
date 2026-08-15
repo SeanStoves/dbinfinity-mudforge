@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.002",
+    version     = "2026.08.15.003",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -161,11 +161,21 @@ local vit = nil
 -- prompt has and does not need a trigger to read. It has no max_hit though, so
 -- the peak seen since this target appeared stands in for one -- self-correcting,
 -- since the first reading of a fresh target is its highest.
---   src  where the enemy bar and the armour bar take their reading from:
---        "gmcp" prefers char.target and score, "prompt" pins both to the
---        prompt's own tokens. A toggle because this MUD's GMCP and its prompt
---        do not always agree and the player knows which they trust.
-local foe = { val = nil, at = 0, saw = "", got = "", why = "", src = "gmcp",
+-- Where each part of the panel takes its reading from.
+--
+-- GMCP by default, everywhere. The line readers are not deleted -- they sit
+-- behind these toggles -- because a MUD that changes what it sends should cost
+-- a setting rather than a working panel, and because this server has changed
+-- what it sends twice already.
+--
+--   bars   armour and the enemy bar: "gmcp" prefers char.target and score,
+--          "prompt" pins both to the prompt's own tokens.
+--   stats  the four attributes, the armour ceiling, zeni: "gmcp" or "score".
+--   items  inventory and equipment: "gmcp", or "capture" to go back to
+--          reading the output of 'inv' and 'eq'.
+local src = { bars = "gmcp", stats = "gmcp", items = "gmcp" }
+
+local foe = { val = nil, at = 0, saw = "", got = "", why = "",
               name = nil, hit = nil, peak = nil, race = nil, max = nil,
               -- seconds before an unrefreshed opponent is dropped; the backstop
               -- behind the fight-end line and the no-opponent prompt
@@ -261,6 +271,53 @@ local function safeNum(v)
     if n == nil then return nil end
     if n ~= n then return nil end
     return n
+end
+
+-- An array that crossed the boundary, put back in order.
+--
+-- Arrays do not arrive reliably 1-indexed here. They have come 0-indexed, as
+-- objects with numeric keys, and as undefined. char.equipment.items and
+-- char.inventory.items are both arrays, so nothing walks them with ipairs
+-- until they have been through this.
+--
+-- Ported from Scouter, where it has been carrying the map runs for months.
+-- Returns the table AND its length: read them into locals, never nest the call.
+local function normArray(v)
+    local out = {}
+    local n = 0
+    if type(v) ~= "table" then return out, 0 end
+
+    for _, item in ipairs(v) do
+        n = n + 1
+        out[n] = item
+    end
+    if n > 0 then return out, n end
+
+    local tmp, minK, maxK = {}, nil, nil
+    for k, item in pairs(v) do
+        local nk = safeNum(k)
+        if nk then
+            tmp[nk] = item
+            if minK == nil or nk < minK then minK = nk end
+            if maxK == nil or nk > maxK then maxK = nk end
+        end
+    end
+    if minK == nil then return out, 0 end
+
+    if maxK > minK + 4096 then maxK = minK + 4096 end   -- never spin forever
+    local shift = 0
+    if minK == 0 then shift = 1 end
+    local i = minK
+    while i <= maxK do
+        local item = tmp[i]
+        if item ~= nil then
+            local pos = i + shift
+            out[pos] = item
+            if pos > n then n = pos end
+        end
+        i = i + 1
+    end
+    return out, n
 end
 
 -- "9,925" and "3,130" are how this MUD writes numbers
@@ -1982,7 +2039,7 @@ local function foeBar()
     -- src 'prompt' pins the bar to the prompt's own percentage. GMCP keeps
     -- being collected -- the name still labels the bar -- but its numbers do
     -- not drive it.
-    if foe.src ~= "prompt" and safeNum(foe.hit) and ceiling and ceiling > 0 then
+    if src.bars ~= "prompt" and safeNum(foe.hit) and ceiling and ceiling > 0 then
         pct = (foe.hit / ceiling) * 100
         num = withCommas(foe.hit)
         -- Shown against a known maximum, the pair is worth printing. Against a
@@ -2155,7 +2212,7 @@ local function portraitBody()
     local arCur, arMax = charState.ar, charState.arMax
     -- score stands in only when the toggle allows it: 'prompt' pins the bar to
     -- the live %z/%Z tokens and nothing staler
-    if foe.src ~= "prompt" and not has(arCur) then arCur = sc.armorVal end
+    if src.bars ~= "prompt" and not has(arCur) then arCur = sc.armorVal end
     if has(arCur) and not has(arMax) then arMax = arCur end
     add(barOrDash("Armor", arCur, arMax, "ar", false))
     -- the ratio bar is what the numeric mode replaces, so it goes with it
@@ -3053,9 +3110,16 @@ local function cfgBody()
     add('<div class="crow"><span class="ck">power level</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="plmode">'
         .. plMode .. "</span></div>")
-    add('<div class="crow"><span class="ck">armor + enemy from</span>')
+    add('<div class="sec">where the numbers come from</div>')
+    add('<div class="crow"><span class="ck">armor + enemy</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="src">'
-        .. foe.src .. "</span></div>")
+        .. src.bars .. "</span></div>")
+    add('<div class="crow"><span class="ck">stats</span>')
+    add('<span class="tb" data-mud-action="cfgtog" data-mud-data="srcstats">'
+        .. src.stats .. "</span></div>")
+    add('<div class="crow"><span class="ck">inventory + equipment</span>')
+    add('<span class="tb" data-mud-action="cfgtog" data-mud-data="srcitems">'
+        .. src.items .. "</span></div>")
 
     add('<div class="crow"><span class="ck">text size</span>')
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font-">-</span>')
@@ -3544,7 +3608,9 @@ local function saveSettings()
             fontScale = tostring(font.scale),
             gagPrompt = gag.on and "yes" or "no",
             itemsGag = itemsGag and "yes" or "no",
-            srcMode = foe.src,
+            srcMode = src.bars,
+            srcStats = src.stats,
+            srcItems = src.items,
             containers = isCont,
             panelAlpha = tostring(panelAlpha),
             profiles = keep,
@@ -4220,7 +4286,11 @@ local function makeWidget()
             elseif arg == "plmode" then
                 if plMode == "nums" then plMode = "bar" else plMode = "nums" end
             elseif arg == "src" then
-                if foe.src == "prompt" then foe.src = "gmcp" else foe.src = "prompt" end
+                if src.bars == "prompt" then src.bars = "gmcp" else src.bars = "prompt" end
+            elseif arg == "srcstats" then
+                if src.stats == "score" then src.stats = "gmcp" else src.stats = "score" end
+            elseif arg == "srcitems" then
+                if src.items == "capture" then src.items = "gmcp" else src.items = "capture" end
             end
             safeRender(true)
             saveSettings()
@@ -4404,7 +4474,7 @@ local function printDiag()
     local foeAge = "-"
     if foe.val then foeAge = tostring(math.floor(os.clock() - foe.at)) end
     print(TAG .. "plMode=" .. plMode .. " foe=" .. tostring(foe.val) .. " foeAge=" .. foeAge
-        .. " src=" .. tostring(foe.src))
+        .. " src=" .. src.bars .. "/" .. src.stats .. "/" .. src.items)
     print(TAG .. "last opponent line: [" .. tostring(foe.saw) .. "]")
     print(TAG .. "read off it: " .. tostring(foe.got)
         .. "  held at clock " .. tostring(foe.at))
@@ -5044,7 +5114,9 @@ function init()
     if gp == "yes" then gag.on = true end
 
     if p.itemsGag == "yes" then itemsGag = true end
-    if p.srcMode == "prompt" then foe.src = "prompt" end
+    if p.srcMode == "prompt" then src.bars = "prompt" end
+    if p.srcStats == "score" then src.stats = "score" end
+    if p.srcItems == "capture" then src.items = "capture" end
 
     -- Stored data is still data: a table written by an older build, or edited
     -- by hand, has never been through itemPhrase. Letters, digits and single
