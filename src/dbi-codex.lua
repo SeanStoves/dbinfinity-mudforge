@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "0.27.0",
+    version     = "2026.08.15.000",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -145,6 +145,14 @@ local sweptOff = 0
 
 -- Which store the records came back out of, for the banner and for diag.
 local loadedFrom = "nothing"
+-- Whether the store answered at all when init() asked it.
+--
+-- It does not always. Default-scope tables live in the world file and init()
+-- runs before a world is open; this plugin is on the global scope, which is
+-- documented as independent of that, but "the read returned nothing" is a
+-- state worth knowing either way -- because a save made in it must not be
+-- allowed to stand in for everything that was there.
+local loadedOk = false
 
 -- Every widget event, printed as it arrives, when asked for. Which of them the
 -- client actually delivers for an <input> -- and what fields ride along -- is
@@ -1131,8 +1139,40 @@ local writes = 0
 local STORE = "dbi-codex-data"
 
 local function saveAll()
+    local outMobs, outItems = mobs, items
+
+    -- If the load came up empty, this session does not know what is in the
+    -- store -- so it writes ALONGSIDE it rather than over it. Portrait lost a
+    -- night to the other behaviour: read nothing at startup, then save that
+    -- nothing as the whole table.
+    --
+    -- Only in that state. A session that DID load is authoritative, and its
+    -- deletions have to stick: this plugin sweeps unread sightings and prunes
+    -- to a cap, and a merge that kept every record on disk would quietly undo
+    -- both on the next write.
+    if not loadedOk then
+        local disk = nil
+        pcall(function() disk = loadTable(STORE, "global") end)
+        if type(disk) == "table" then
+            outMobs, outItems = {}, {}
+            for _, pair in ipairs({ { disk.mobs, outMobs }, { disk.items, outItems } }) do
+                if type(pair[1]) == "table" then
+                    for k, v in pairs(pair[1]) do
+                        if type(k) == "string" and type(v) == "table" then pair[2][k] = v end
+                    end
+                end
+            end
+            for k, v in pairs(mobs) do
+                if type(k) == "string" and type(v) == "table" then outMobs[k] = v end
+            end
+            for k, v in pairs(items) do
+                if type(k) == "string" and type(v) == "table" then outItems[k] = v end
+            end
+        end
+    end
+
     local ok, err = pcall(function()
-        saveTable(STORE, { mobs = mobs, items = items, view = view }, "global")
+        saveTable(STORE, { mobs = outMobs, items = outItems, view = view }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
@@ -1159,6 +1199,7 @@ local function loadAll()
         loadedFrom = "the global store"
     end
     if type(p) ~= "table" then return end
+    loadedOk = true
 
     if type(p.mobs) == "table" then
         for k, v in pairs(p.mobs) do
@@ -2121,6 +2162,35 @@ end
 
 function init()
     loadAll()
+
+    -- Came up with nothing? Look again.
+    --
+    -- The store is not always readable the instant a plugin loads. Until it is,
+    -- this session knows no mobs and no items -- and while saveAll() will no
+    -- longer write that over the real store, running the whole session blind is
+    -- still wrong when the records are sitting right there.
+    --
+    -- Backed off, and it stops at the first read that answers.
+    if not loadedOk then
+        local waits = { 250, 600, 1500, 3000, 6000 }
+        local again = nil
+        again = function(step)
+            if loadedOk then return end
+            loadAll()
+            if loadedOk then
+                if shown then safeRender() end
+                print(TAG .. "store was not ready at load; picked it up "
+                    .. tostring(waits[step]) .. "ms in -- "
+                    .. countOf(mobs) .. " mobs, " .. countOf(items) .. " items.")
+                return
+            end
+            local nxt = waits[step + 1]
+            if nxt then
+                pcall(function() addTimer(nxt, function() again(step + 1) end) end)
+            end
+        end
+        pcall(function() addTimer(waits[1], function() again(1) end) end)
+    end
 
     widget = createWidget({
         type     = "html",
