@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "0.50.0",
+    version     = "2026.08.15.000",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -4853,13 +4853,44 @@ function init()
     local p = loadTable("dbi-portrait-prefs", "global")
     if type(p) ~= "table" then p = {} end
 
-    -- Anything written before the move to the global store. That lived in the
-    -- world file, so it is only readable once a world is open -- which at init
-    -- it usually is not. The late re-read below picks it up when it is.
-    if type(p.profiles) ~= "table" then
-        local old = nil
-        pcall(function() old = loadTable("portraitprefs") end)
-        if type(old) == "table" and type(old.profiles) == "table" then p = old end
+    -- Anything written before the move to the global store, merged in rather
+    -- than swapped for.
+    --
+    -- This guard used to be 'only if the global store has no profiles at all',
+    -- and that was too weak by exactly one step: after the move, the plugin
+    -- came up knowing nothing, read a score, and wrote an EMPTY solao profile
+    -- to the new key. From then on the new store had a profile, so the
+    -- migration never ran again and five transformations sat unreachable in
+    -- the old one. Merging field by field cannot get stuck that way -- an empty
+    -- profile takes everything, a full one takes nothing.
+    --
+    -- The old store is default-scope, which means the world file, which is not
+    -- readable until a world is open. At init it usually is not, so this is
+    -- expected to do nothing on the first pass and the late re-read below is
+    -- what actually lands it.
+    local legacy = nil
+    pcall(function() legacy = loadTable("portraitprefs") end)
+    if type(legacy) == "table" and type(legacy.profiles) == "table" then
+        if type(p.profiles) ~= "table" then p.profiles = {} end
+        for k, v in pairs(legacy.profiles) do
+            if type(k) == "string" and type(v) == "table" then
+                local mine = p.profiles[k]
+                if type(mine) ~= "table" then
+                    p.profiles[k] = v
+                else
+                    for fk, fv in pairs(v) do
+                        local cur = mine[fk]
+                        local empty = (cur == nil or cur == "")
+                        if not empty and type(cur) == "table" then
+                            empty = true
+                            for _ in pairs(cur) do empty = false end
+                        end
+                        if empty then mine[fk] = fv end
+                    end
+                end
+            end
+        end
+        if not has(p.last) and has(legacy.last) then p.last = legacy.last end
     end
 
     -- The backup, and a per-profile merge taking whichever copy has more in it.
@@ -5051,7 +5082,17 @@ function init()
     -- sitting right there.
     --
     -- Only when nothing was found, so a real first run is untouched.
-    if profileKey == "" and rowCountOf(profiles) == 0 then
+    -- Nothing the user configured? Then keep looking.
+    --
+    -- The test used to be 'no profiles at all', which missed the case that
+    -- actually happened: a profile that exists and is EMPTY. After the move to
+    -- the global store this plugin came up blank, read a score, wrote an empty
+    -- solao, and from then on had "a profile" -- so it stopped looking while
+    -- five transformations sat in the store it had stopped reading.
+    --
+    -- An avatar, a name or a form is what a person put there. None of the
+    -- three means there is nothing to lose by looking again.
+    if avatarUrl == "" and nameOverride == "" and formCountNow() == 0 then
         -- Backed off rather than one shot at three seconds. The race is not
         -- rare -- it fired on the first restart after this shipped -- so the
         -- panel would sit blank for three seconds on most launches. First look
@@ -5064,23 +5105,37 @@ function init()
         local waits = { 250, 600, 1500, 3000, 6000 }
         local tryLate = nil
         tryLate = function(step)
-            if profileKey ~= "" then return end
+            if avatarUrl ~= "" or nameOverride ~= "" or formCountNow() > 0 then return end
 
-            local late = nil
-            pcall(function() late = loadTable("dbi-portrait-prefs", "global") end)
-            -- and the pre-move store, which is in the world file and therefore
-            -- only readable now that one is open
-            if type(late) ~= "table" or type(late.profiles) ~= "table" then
-                pcall(function() late = loadTable("portraitprefs") end)
-            end
+            -- BOTH stores, every time. The new one may hold a profile that is
+            -- merely empty, and stopping there is what left the old one
+            -- unreachable; whichever actually has something wins.
             local rec, who = nil, ""
-            if type(late) == "table" and type(late.profiles) == "table" then
-                if has(late.last) then who = trimBoth(tostring(late.last)):lower() end
-                rec = late.profiles[who]
+            for _, src in ipairs({ "global", "legacy" }) do
+                local late = nil
+                if src == "global" then
+                    pcall(function() late = loadTable("dbi-portrait-prefs", "global") end)
+                else
+                    -- world file: only readable once a world is open, which is
+                    -- the whole reason this runs late rather than at init
+                    pcall(function() late = loadTable("portraitprefs") end)
+                end
+                if type(late) == "table" and type(late.profiles) == "table" then
+                    local key = ""
+                    if has(late.last) then key = trimBoth(tostring(late.last)):lower() end
+                    if key == "" and profileKey ~= "" then key = profileKey end
+                    local got = late.profiles[key]
+                    if type(got) == "table" and profileWeight(got) > profileWeight(rec) then
+                        rec, who = got, key
+                        if type(profiles) ~= "table" or rowCountOf(profiles) == 0 then
+                            profiles = late.profiles
+                        end
+                    end
+                end
             end
 
-            if type(rec) ~= "table" then
-                -- nothing yet; come back unless we have run out of patience
+            -- Nothing worth having in either. Come back, unless patience is out.
+            if type(rec) ~= "table" or profileWeight(rec) <= 1 then
                 local nxt = waits[step + 1]
                 if nxt then
                     pcall(function() addTimer(nxt, function() tryLate(step + 1) end) end)
@@ -5088,16 +5143,18 @@ function init()
                 return
             end
 
-            profiles = late.profiles
-            profileKey = who
+            if who ~= "" then profileKey = who end
+            if type(profiles[profileKey]) ~= "table" then profiles[profileKey] = rec end
             if type(rec.avatarUrl) == "string" then avatarUrl = safeAvatarUrl(rec.avatarUrl) end
             if type(rec.nameOverride) == "string" then nameOverride = rec.nameOverride end
             FORMS = formsFrom(rec.forms)
             if type(rec.sc) == "table" then sc = rec.sc end
             restoreItems(rec)
             safeRender(true)
-            echo(TAG .. "storage was not ready at load; picked up " .. who
-                .. "'s settings " .. tostring(waits[step]) .. "ms in.", ENERGY)
+            saveSettings()
+            echo(TAG .. "picked up " .. profileKey .. "'s settings "
+                .. tostring(waits[step]) .. "ms in ("
+                .. formCountNow() .. " form(s)).", ENERGY)
         end
         pcall(function() addTimer(waits[1], function() tryLate(1) end) end)
     end
