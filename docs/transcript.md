@@ -115,3 +115,7 @@ storage engine whether the permission is on or not, which is the thing being
 avoided.
 
 MIT licensed.
+
+---
+
+**Installing:** add the repository in MudForge (Settings → Plugins → Repositories) and sync, or drop [`mudlog.lua`](../src/mudlog.lua) straight into `~/MudForge/plugins/`. One or the other, never both — two copies of a plugin share a storage namespace and overwrite each other.

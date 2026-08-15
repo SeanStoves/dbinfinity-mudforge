@@ -471,3 +471,7 @@ database, so they export with `exportMapJson` and load into someone else's
 client. The vnum block each area allocates from, the travel verbs and your
 manual nudges live there too — hand someone the map and their copy behaves like
 yours, without copying a single setting.
+
+---
+
+**Installing:** add the repository in MudForge (Settings → Plugins → Repositories) and sync, or drop [`dbi-mapper.lua`](../src/dbi-mapper.lua) straight into `~/MudForge/plugins/`. One or the other, never both — two copies of a plugin share a storage namespace and overwrite each other.

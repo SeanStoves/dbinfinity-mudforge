@@ -170,3 +170,7 @@ from — rejecting `NaN` from `tonumber`, treating a missing GMCP field as
 `undefined` rather than `nil`, and copying every packet on arrival because the
 client reuses the object once the callback returns. All three were found the
 hard way and all three are still load-bearing.
+
+---
+
+**Installing:** add the repository in MudForge (Settings → Plugins → Repositories) and sync, or drop [`dbi-map.lua`](../src/dbi-map.lua) straight into `~/MudForge/plugins/`. One or the other, never both — two copies of a plugin share a storage namespace and overwrite each other.

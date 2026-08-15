@@ -16,7 +16,29 @@ In MudForge, open **Settings → Plugins → Repositories**, add this and sync:
 https://github.com/SeanStoves/dbinfinity-mudforge
 ```
 
-The plugins then appear in the plugin browser.
+The plugins then appear in the plugin browser, and updates arrive with a sync.
+
+### Or install the file directly
+
+If you would rather not add a repository, every plugin is also here as plain
+Lua under [`src/`](src/). Download the one you want and drop it in MudForge's
+plugins folder:
+
+```
+~/MudForge/plugins/
+```
+
+That folder is flat — no subdirectories — and the client picks the file up on
+the next reload. The `src/` copies are written from the same string that goes
+into the packaged bundle, so they are the same code, only readable.
+
+**Do not do both for the same plugin.** A repository install does not live on
+disk in that folder, so it is invisible there and loads anyway. Two copies of
+one plugin means two `init()` calls, two sets of line readers, and two panels
+drawing into a widget whose id they also share — and because they share a
+storage namespace, whichever writes last wins. That has cost real data here,
+twice. If a plugin starts behaving oddly, check that folder for a second file;
+a banner printing twice on load is the other tell.
 
 ## Plugins
 
@@ -29,6 +51,7 @@ below is all you need to remember.
 | **[DB Infinity Mapper](docs/mapper.md)** (`dbi-mapper`) | `dbmap`, `dbgo` | A map of the whole world, built as you walk it, with pathfinding and speedwalks |
 | **[DB Infinity Portrait](docs/portrait.md)** (`dbi-portrait`) | `dbchar` | Your character: avatar, vitals, power level, transformations, and the full score sheet |
 | **[DB Infinity Chat](docs/chat.md)** (`dbi-chat`) | `dbchat` | Channel traffic split into tabs, with captures you define |
+| **[DB Infinity Codex](docs/codex.md)** (`dbi-codex`) | `dbdex` | A searchable record of the mobs and items you have met, built from what the MUD says in passing |
 | **[Transcript](docs/transcript.md)** (`mudlog`) | `mudlog` | Plain-text session logs on disk, for any MUD. Needs the File System Access permission |
 
 Scouter and Mapper are not the same thing and do not overlap: Scouter draws the

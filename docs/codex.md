@@ -144,3 +144,7 @@ readers, and both draw into a widget whose id they also share. That has cost
 this plugin a data loss already. Check your plugins folder for a second file
 before concluding anything else is wrong; a banner printing twice on load is
 the other tell.
+
+---
+
+**Installing:** add the repository in MudForge (Settings → Plugins → Repositories) and sync, or drop [`dbi-codex.lua`](../src/dbi-codex.lua) straight into `~/MudForge/plugins/`. One or the other, never both — two copies of a plugin share a storage namespace and overwrite each other.

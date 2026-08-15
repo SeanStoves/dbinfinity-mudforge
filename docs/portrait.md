@@ -210,3 +210,7 @@ The bundled avatars are AI-generated original artwork, not screencaps. They're
 race archetypes in the style of the genre rather than any character's likeness.
 
 MIT licensed.
+
+---
+
+**Installing:** add the repository in MudForge (Settings → Plugins → Repositories) and sync, or drop [`dbi-portrait.lua`](../src/dbi-portrait.lua) straight into `~/MudForge/plugins/`. One or the other, never both — two copies of a plugin share a storage namespace and overwrite each other.

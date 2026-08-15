@@ -110,3 +110,7 @@ selection come from the browser instead of from hand-rolled font arithmetic,
 and captures can be added while you play rather than living in the source.
 
 MIT licensed.
+
+---
+
+**Installing:** add the repository in MudForge (Settings → Plugins → Repositories) and sync, or drop [`dbi-chat.lua`](../src/dbi-chat.lua) straight into `~/MudForge/plugins/`. One or the other, never both — two copies of a plugin share a storage namespace and overwrite each other.
