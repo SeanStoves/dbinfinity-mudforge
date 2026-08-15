@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.000",
+    version     = "2026.08.15.001",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -43,35 +43,72 @@ local AVATAR_BASE = "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mud
 -- The design's own tokens (app/globals.css), oklch converted to hex. oklch is
 -- given second wherever it matters so a browser that understands it gets the
 -- exact colour and one that does not keeps the approximation.
-local HP      = "#ea3c3f"
-local KI      = "#00acf3"
-local STAM    = "#5ec966"
-local ENERGY  = "#fb7c00"
-local FOE     = "#ff9a3c"
-local GOLD    = "#e8b45c"      -- armour
-local AUC     = "#a878ff"      -- the auction pill
-local PANEL_BG = "#080e16"
-local INK     = "#edf2f8"
-local INK_DIM = "#969fab"
-local RULE    = "rgba(255,255,255,0.12)"
-local CARD_RGB = "15,22,33"
+--
+-- One table rather than a name each. Lua 5.1 allows a chunk 200 locals and this
+-- file is at the ceiling, so a dozen colours spent a dozen of them; as fields
+-- they cost one and the next feature gets the room back.
+local C = {
+    hp       = "#ea3c3f",
+    ki       = "#00acf3",
+    stam     = "#5ec966",
+    energy   = "#fb7c00",
+    foe      = "#ff9a3c",
+    gold     = "#e8b45c",           -- armour
+    auc      = "#a878ff",           -- the auction pill
+    panel_bg = "#080e16",
+    ink      = "#edf2f8",
+    ink_dim  = "#969fab",
+    rule     = "rgba(255,255,255,0.12)",
+    card_rgb = "15,22,33",
+}
 
 -- Where a bar changes character, mapped onto the same palette: energy at the
 -- first threshold, then deeper, then the health red. 15% is the one that
 -- matters -- red and moving.
-local LV_WARN = 60
-local LV_LOW  = 30
-local LV_CRIT = 15
+local LV = { warn = 60, low = 30, crit = 15 }
 
-local FONT_FALLBACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
-local termFamily = ""
-local termSize = 13
+
+-- Where a bar changes character, mapped onto the same palette: energy at the
+-- first threshold, then deeper, then the health red. 15% is the one that
+-- matters -- red and moving.
+
+
+-- The terminal's font, and the user's multiplier over it.
+local font = {
+    fallback = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+    family   = "",
+    size     = 13,
+    scale    = 1,               -- user multiplier over the terminal's size
+}
+
+-- Hiding the prompt line: the trigger doing it, the ids it owns, and the text
+-- it is matching on.
+local gag = { on = false, triggerId = nil, ids = {}, sig = "", tag = "" }
+
+-- Everything about reading the prompt: what has been learned, what is armed,
+-- and the signature that says whether the arming is still current.
+--
+-- One table for the lot. Nine names for one subject is nine of the 200 a chunk
+-- gets, and this file ran out of them.
+local prompt = {
+    learned = {},               -- the formats, as the user set them
+    set     = nil,              -- the compiled set in use
+    roles   = nil,              -- which fields each compiled line yields
+    trigIds = {},
+    used    = {},
+    order   = {},
+    sig     = "",
+    blank   = false,
+    tag     = "LifeForce:",
+}
+
+-- The GMCP handshake, which Scouter usually owns.
+local nego = { connected = false, tick = 0, done = false }
 
 local widget = nil
 local panelAlpha = 1
 local view = "portrait"      -- or "sheet"
 local plMode = "bar"         -- or "nums": Base PL | Curr PL side by side
-local fontScale = 1          -- user multiplier over the terminal's size
 local avatarUrl = ""         -- override, per character
 local lastError = "none"
 
@@ -84,15 +121,8 @@ local lastError = "none"
 -- come into it -- but the label has to be the right one, and the MUD announces
 -- it every time it draws a prompt. promptTag is what the next gag will match;
 -- gagTag is what the live trigger was built on, so a change re-arms it.
-local gagPrompt = false
-local gagTriggerId = nil
-local gagIds = {}
-local promptTrigIds = {}
 
 
-local gagSig = ""
-local promptTag = "LifeForce:"
-local gagTag = ""
 
 -- Transformation portraits. Each form pairs the line the MUD prints on entering
 -- it with the image to wear while in it:
@@ -190,9 +220,6 @@ local inEq = false
 -- One table rather than two names. The chunk is at Lua 5.1's 200-local ceiling
 -- (sharp edge 7) and folding related constants is the fix for that.
 local HELLO = { key = "dbi-gmcp-hello", window = 30 }
-local negoConnected = false
-local negoTick = 0
-local negoDone = false
 
 ----------------------------------------------------------------------
 -- value hygiene, same reasons as Scouter
@@ -627,6 +654,11 @@ local PROMPT_ROLE = {
 -- The ones that are words rather than numbers. Everything else goes through
 -- promptNum, which refuses anything that is not a figure -- including 'N/A',
 -- which is what a token with nothing to report prints.
+-- What a %-token compiles to. num and any are the same pattern today; they are
+-- separate names because the two mean different things and one of them will
+-- eventually tighten.
+local P = { num = "(%S*)", any = "(%S*)", txt = "(.*)" }
+
 local PROMPT_TEXT = {
     style = true, sector = true, sunlight = true, clock = true,
     auction = true, racialTimer = true, plColour = true,
@@ -637,8 +669,6 @@ local PROMPT_TEXT = {
 -- carrying '%y' out of combat reads 'L:100.00 vs N/A Ki:9,010' and a digits-only
 -- class matches none of it. What makes a matcher specific is its literals, not
 -- its value class.
-local P_NUM = "(%S*)"
-local P_ANY = "(%S*)"
 
 -- The word tokens hold more than one word. An auction item is 'black socks', a
 -- sector is 'Deep Forest', a style is two words as often as one -- and '(%S*)'
@@ -650,7 +680,6 @@ local P_ANY = "(%S*)"
 -- these fields are written '[%o]' and '[^%]]' reads in JavaScript as "any
 -- character, then a ]". What bounds this is the literal that follows it in the
 -- format, which is what greedy backtracking is for.
-local P_TXT = "(.*)"
 
 -- Trigger patterns are capped at 1024 characters by the client. Nothing this
 -- generates comes close -- the longest is 88 for the stock fight prompt, and the
@@ -766,13 +795,13 @@ local function promptCompile(fmt)
                     -- trigger callback can read them positionally: captures[n]
                     -- lines up with roles[n].
                     if role and PROMPT_TEXT[role] then
-                        pat = pat .. P_TXT
+                        pat = pat .. P.txt
                         rx = rx .. "(.*)"
                     elseif role then
-                        pat = pat .. P_NUM
+                        pat = pat .. P.num
                         rx = rx .. "(\\S*)"
                     else
-                        pat = pat .. P_ANY
+                        pat = pat .. P.any
                         rx = rx .. "(\\S*)"
                     end
                     k = k + 2
@@ -869,9 +898,6 @@ local KNOWN_PROMPTS = {
 
 -- Learned formats go in front of the built-ins: a player who has told us what
 -- their prompt is should not be matched by something that merely looks close.
-local promptLearned = {}
-local promptSet = nil
-local promptRoles
 
 -- Which of the two the header just announced, and the format learned for each.
 -- Kept apart from promptLearned -- which is a flat list for compiling -- because
@@ -899,15 +925,11 @@ local edit = { prompt = "", fprompt = "", avatar = "", name = "",
 -- these rather than from all ten built-in formats -- registering a trigger for
 -- every prompt the MUD documents would hide other players' pasted prompts.
 local armPrompt
-local promptUsed = {}
-local promptOrder = {}
-local promptSig = ""
 
 -- Set when the line just seen was the last line of a prompt whose format ends
 -- in a newline. The blank line that follows is part of the prompt and goes with
 -- it when gagging, but only then -- a bare '^$' trigger would flatten every
 -- blank line the MUD prints.
-local promptBlank = false
 
 -- Longest pattern first inside each group. A matcher is anchored at the head
 -- but not at the tail -- deliberately, because a prompt can carry the next line
@@ -965,12 +987,12 @@ end
 local charState = {}
 
 local function promptRebuild()
-    promptSet = {}
+    prompt.set = {}
     -- Each stage says which one failed. A single pcall further up reports
     -- "something threw" and there are four candidates behind it.
-    local ok, err = pcall(promptAdd, promptSet, promptLearned)
+    local ok, err = pcall(promptAdd, prompt.set, prompt.learned)
     if not ok then pd.buildErr = "learned: " .. tostring(err) end
-    ok, err = pcall(promptAdd, promptSet, KNOWN_PROMPTS)
+    ok, err = pcall(promptAdd, prompt.set, KNOWN_PROMPTS)
     if not ok then pd.buildErr = "known: " .. tostring(err) end
 end
 
@@ -1014,16 +1036,16 @@ local function promptLearn(fmt, quiet)
         end
     end
 
-    for _, have in ipairs(promptLearned) do
+    for _, have in ipairs(prompt.learned) do
         if have == text then return false end
     end
 
-    promptLearned[#promptLearned + 1] = text
+    prompt.learned[#prompt.learned + 1] = text
     promptRebuild()
     pcall(armPrompt)
     if not quiet then
         echo(TAG .. "learned your prompt: " .. #compiled .. " line(s), "
-            .. "reading " .. tostring(promptRoles(compiled)) .. ".", ENERGY)
+            .. "reading " .. tostring(prompt.roles(compiled)) .. ".", C.energy)
     end
     return true
 end
@@ -1037,7 +1059,7 @@ end
 --
 --   loadPlugin(): Cannot declare a function that shadows a let/const/class/
 --   function variable 'promptRoles'
-promptRoles = function(compiled)
+prompt.roles = function(compiled)
     local seen, order = {}, {}
     for _, m in ipairs(compiled) do
         for _, role in ipairs(m.roles) do
@@ -1056,7 +1078,7 @@ end
 -- out: "Solao tells you: 'LF:<88> Ki:<900>'" has the fields but not at the
 -- front.
 local function promptScan(text)
-    for _, m in ipairs(promptSet) do
+    for _, m in ipairs(prompt.set) do
         -- Captured into named locals rather than '{ text:match(pat) }'. A
         -- multi-value return wrapped in a table constructor is the shape sharp
         -- edge 4 is about, and no format here needs more than ten -- the widest
@@ -1073,13 +1095,13 @@ local function promptScan(text)
         -- ending an item capture on its own header line.
         if type(c1) == "string" then
             for _, sib in ipairs(m.kin or { m }) do
-                if sib.rx and not promptUsed[sib.rx] then
-                    promptUsed[sib.rx] = true
-                    promptOrder[#promptOrder + 1] = sib.rx
-                    promptSig = promptSig .. sib.rx .. "\n"
+                if sib.rx and not prompt.used[sib.rx] then
+                    prompt.used[sib.rx] = true
+                    prompt.order[#prompt.order + 1] = sib.rx
+                    prompt.sig = prompt.sig .. sib.rx .. "\n"
                 end
             end
-            promptBlank = m.blankAfter == true
+            prompt.blank = m.blankAfter == true
             local got = { head = m.head }
             for n, role in ipairs(m.roles) do
                 local v = caps[n]
@@ -1092,7 +1114,7 @@ local function promptScan(text)
 end
 
 local function promptRead(clean)
-    if not promptSet then promptRebuild() end
+    if not prompt.set then promptRebuild() end
     local text = trimBoth(clean)
     if text == "" then return nil end
 
@@ -1151,11 +1173,11 @@ local function notePrompt(clean)
         -- fight every time someone quoted their own prompt at you.
         local at = low:gsub("^%(", "")
         if at:sub(1, 10) == "lifeforce:" then
-            promptTag = "LifeForce:"
+            prompt.tag = "LifeForce:"
             return true, true
         end
         if at:sub(1, 3) == "lf:" then
-            promptTag = "LF:"
+            prompt.tag = "LF:"
             return true, true
         end
     end
@@ -1365,7 +1387,7 @@ local function acceptVitals(data)
         basepl    = safeNum(src.basepl),
         pl        = safeNum(src.pl),
     }
-    negoDone = true
+    nego.done = true
     return true
 end
 
@@ -1413,19 +1435,19 @@ local function readTerminalFont()
     if not good or type(f) ~= "table" then return end
 
     if type(f.family) == "string" and f.family ~= "" then
-        termFamily = f.family:gsub("[;}<>]", "")
+        font.family = f.family:gsub("[;}<>]", "")
     end
     local n = safeNum(f.size)
-    if n and n >= 6 and n <= 72 then termSize = math.floor(n) end
+    if n and n >= 6 and n <= 72 then font.size = math.floor(n) end
 end
 
 local function chromeFont()
-    if termFamily ~= "" then return termFamily .. "," .. FONT_FALLBACK end
-    return FONT_FALLBACK
+    if font.family ~= "" then return font.family .. "," .. font.fallback end
+    return font.fallback
 end
 
-local function barSize()  return math.max(7, math.floor(termSize * 0.60 * fontScale)) end
-local function bodySize() return math.max(9, math.floor(termSize * 0.82 * fontScale)) end
+local function barSize()  return math.max(7, math.floor(font.size * 0.60 * font.scale)) end
+local function bodySize() return math.max(9, math.floor(font.size * 0.82 * font.scale)) end
 
 ----------------------------------------------------------------------
 -- rendering
@@ -1554,7 +1576,7 @@ local function applyImage(url, onOk)
         echo(TAG .. "http to go and look. Use the direct image url.", "#ff6666")
         return
     end
-    echo(TAG .. "that looks like a page; asking it for the image...", ENERGY)
+    echo(TAG .. "that looks like a page; asking it for the image...", C.energy)
     local asked = u
     httpTable.get(u, nil, function(status, body, err)
         if err or not status or status >= 400 then
@@ -1619,48 +1641,48 @@ local function css()
     add("<style>")
     add(".dbi-port{position:relative;height:100%;box-sizing:border-box;")
     add("display:flex;flex-direction:column;container-type:inline-size;overflow:hidden;")
-    add("background:rgba(" .. CARD_RGB .. "," .. a .. ");color:" .. INK .. ";")
+    add("background:rgba(" .. C.card_rgb .. "," .. a .. ");color:" .. C.ink .. ";")
     add("font-family:" .. chromeFont() .. ";}")
 
         -- header: the title, a live pulse, and the controls
     add(".dbi-port .bar{flex:0 0 auto;display:flex;align-items:center;gap:6px;")
     add("padding:6px 10px;border-bottom:1px solid rgba(251,124,0,0.25);")
     add("font-size:" .. barSize() .. "px;font-weight:600;letter-spacing:0.2em;")
-    add("text-transform:uppercase;color:" .. ENERGY .. ";}")
+    add("text-transform:uppercase;color:" .. C.energy .. ";}")
     add(".dbi-port .bar .ttl{flex:1 1 auto;min-width:0;overflow:hidden;")
     add("text-overflow:ellipsis;white-space:nowrap;}")
     add(".dbi-port .dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;")
-    add("background:" .. STAM .. ";box-shadow:0 0 6px " .. STAM .. ";")
+    add("background:" .. C.stam .. ";box-shadow:0 0 6px " .. C.stam .. ";")
     add("animation:hudPulse 2s ease-in-out infinite;}")
     add("@keyframes hudPulse{0%,100%{opacity:1}50%{opacity:0.35}}")
     add(".dbi-port .tb{flex:0 0 auto;font-size:" .. barSize() .. "px;letter-spacing:0.1em;")
     add("text-transform:uppercase;padding:2px 5px;border-radius:2px;")
-    add("border:1px solid " .. RULE .. ";color:" .. INK_DIM .. ";")
+    add("border:1px solid " .. C.rule .. ";color:" .. C.ink_dim .. ";")
     add("cursor:pointer;user-select:none;white-space:nowrap;}")
-    add(".dbi-port .tb:hover{color:" .. INK .. ";border-color:" .. ENERGY .. ";}")
+    add(".dbi-port .tb:hover{color:" .. C.ink .. ";border-color:" .. C.energy .. ";}")
     -- pushes the buttons to the right of the title
     add(".dbi-port .sp{flex:1 1 auto;}")
 
     -- The tab strip. Fixed under the portrait, so it stays put while the body
     -- scrolls -- which is the whole reason the face was hoisted out of it.
     add(".dbi-port .tabs{flex:0 0 auto;display:flex;gap:3px;padding:5px 6px 0 6px;")
-    add("border-bottom:1px solid " .. RULE .. ";}")
+    add("border-bottom:1px solid " .. C.rule .. ";}")
     add(".dbi-port .tab{flex:1 1 0;text-align:center;cursor:pointer;")
     add("user-select:none;white-space:nowrap;overflow:hidden;")
     add("font-size:" .. barSize() .. "px;letter-spacing:0.06em;")
     add("text-transform:uppercase;padding:4px 2px;border-radius:3px 3px 0 0;")
-    add("border:1px solid " .. RULE .. ";border-bottom:none;")
-    add("color:" .. INK_DIM .. ";background:rgba(255,255,255,0.02);}")
-    add(".dbi-port .tab:hover{color:" .. INK .. ";}")
+    add("border:1px solid " .. C.rule .. ";border-bottom:none;")
+    add("color:" .. C.ink_dim .. ";background:rgba(255,255,255,0.02);}")
+    add(".dbi-port .tab:hover{color:" .. C.ink .. ";}")
 
     -- Footer, pinned under the body. Only drawn when it has something in it.
     add(".dbi-port .foot{flex:0 0 auto;display:flex;gap:4px;flex-wrap:wrap;")
     add("justify-content:center;")
-    add("padding:4px 6px;border-top:1px solid " .. RULE .. ";}")
+    add("padding:4px 6px;border-top:1px solid " .. C.rule .. ";}")
     add(".dbi-port .fpill{font-size:clamp(9px,3cqw,12px);padding:2px 7px;")
     add("border-radius:9px;cursor:pointer;user-select:none;")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")
-    add("border:1px solid " .. AUC .. ";color:" .. AUC .. ";")
+    add("border:1px solid " .. C.auc .. ";color:" .. C.auc .. ";")
     add("background:rgba(168,120,255,0.10);}")
     add(".dbi-port .fpill:hover{background:rgba(168,120,255,0.22);}")
 
@@ -1678,16 +1700,16 @@ local function css()
     add("white-space:nowrap;}")
     add(".dbi-port .ib{flex:0 0 auto;font-size:clamp(8px,2.6cqw,11px);")
     add("padding:1px 5px;border-radius:2px;cursor:pointer;user-select:none;")
-    add("border:1px solid " .. RULE .. ";color:" .. INK_DIM .. ";}")
-    add(".dbi-port .ib:hover{color:" .. ENERGY .. ";border-color:" .. ENERGY .. ";}")
+    add("border:1px solid " .. C.rule .. ";color:" .. C.ink_dim .. ";}")
+    add(".dbi-port .ib:hover{color:" .. C.energy .. ";border-color:" .. C.energy .. ";}")
     -- contents of an open container, indented under it
     add(".dbi-port .isub{padding:0 0 0 14px;font-size:clamp(9px,3cqw,13px);")
-    add("color:" .. INK_DIM .. ";overflow:hidden;text-overflow:ellipsis;")
-    add("white-space:nowrap;border-left:1px solid " .. RULE .. ";")
+    add("color:" .. C.ink_dim .. ";overflow:hidden;text-overflow:ellipsis;")
+    add("white-space:nowrap;border-left:1px solid " .. C.rule .. ";")
     add("margin-left:4px;}")
     add(".dbi-port .iempty{font-style:italic;}")
 
-    add(".dbi-port .stale{font-size:" .. barSize() .. "px;color:" .. INK_DIM .. ";")
+    add(".dbi-port .stale{font-size:" .. barSize() .. "px;color:" .. C.ink_dim .. ";")
     add("padding:0 0 4px 0;font-style:italic;}")
     -- the refresh sits on its own line above the rows, right aligned, so it
     -- does not join the scrum of buttons every row already carries
@@ -1696,9 +1718,9 @@ local function css()
     -- the slot, as its own column on the equipment tab. Fixed width so the
     -- names line up down the panel rather than starting wherever the slot ended
     add(".dbi-port .islot{flex:0 0 4.6em;font-size:clamp(8px,2.5cqw,10px);")
-    add("letter-spacing:0.08em;text-transform:uppercase;color:" .. INK_DIM .. ";")
+    add("letter-spacing:0.08em;text-transform:uppercase;color:" .. C.ink_dim .. ";")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
-    add(".dbi-port .tab.sel{color:" .. ENERGY .. ";border-color:" .. ENERGY .. ";")
+    add(".dbi-port .tab.sel{color:" .. C.energy .. ";border-color:" .. C.energy .. ";")
     add("background:rgba(251,124,0,0.12);}")
 
     -- Both labels ship and CSS picks one. widgetInfo lies about the panel size
@@ -1709,7 +1731,7 @@ local function css()
     add("@container (max-width: 260px){")
     add(".dbi-port .tl{display:none;}")
     add(".dbi-port .ts{display:inline;}}")
-    add(".dbi-port .tb.on{color:" .. ENERGY .. ";border-color:" .. ENERGY .. ";")
+    add(".dbi-port .tb.on{color:" .. C.energy .. ";border-color:" .. C.energy .. ";")
     add("background:rgba(251,124,0,0.12);}")
 
     add(".dbi-port .body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;}")
@@ -1726,16 +1748,16 @@ local function css()
     add("background-size:100% auto;background-position:center top;")
     add("background-repeat:no-repeat;}")
     add(".dbi-port .face::before{content:\'\';position:absolute;inset:0;")
-    add("background:linear-gradient(to top,rgba(" .. CARD_RGB .. ",1) 0%,")
-    add("rgba(" .. CARD_RGB .. ",0.3) 45%,transparent 100%);}")
+    add("background:linear-gradient(to top,rgba(" .. C.card_rgb .. ",1) 0%,")
+    add("rgba(" .. C.card_rgb .. ",0.3) 45%,transparent 100%);}")
     add(".dbi-port .face::after{content:\'\';position:absolute;inset:0;opacity:0.4;")
     add("background:repeating-linear-gradient(to bottom,rgba(255,255,255,0.04) 0 1px,")
     add("transparent 1px 3px);}")
     add(".dbi-port .over{position:absolute;left:0;right:0;bottom:0;padding:10px;z-index:2;}")
-    add(".dbi-port .nm{font-size:190%;font-weight:700;line-height:1;color:" .. ENERGY .. ";")
+    add(".dbi-port .nm{font-size:190%;font-weight:700;line-height:1;color:" .. C.energy .. ";")
     add("text-shadow:0 1px 6px rgba(0,0,0,0.8);}")
-    add(".dbi-port .sub{margin-top:3px;font-size:" .. bodySize() .. "px;color:" .. STAM .. ";}")
-    add(".dbi-port .sub i{color:" .. INK_DIM .. ";font-style:normal;margin:0 4px;}")
+    add(".dbi-port .sub{margin-top:3px;font-size:" .. bodySize() .. "px;color:" .. C.stam .. ";}")
+    add(".dbi-port .sub i{color:" .. C.ink_dim .. ";font-style:normal;margin:0 4px;}")
 
     add(".dbi-port .pad{display:flex;flex-direction:column;gap:10px;padding:10px;}")
 
@@ -1745,14 +1767,14 @@ local function css()
     add("border:1px solid rgba(251,124,0,0.3);background:rgba(0,0,0,0.4);}")
     add(".dbi-port .pl:hover{border-color:rgba(251,124,0,0.65);}")
     add(".dbi-port .pl .k{font-size:" .. barSize() .. "px;font-weight:600;")
-    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. INK_DIM .. ";}")
+    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. C.ink_dim .. ";}")
     -- The figure is the widest thing in the panel, so it tracks the panel's own
     -- width rather than the font size. A fixed 150% put a six-digit power level
     -- shoulder to shoulder with its label in a narrow column.
-    local plLo = math.max(11, math.floor(termSize * 0.95 * fontScale))
-    local plHi = math.max(16, math.floor(termSize * 1.7 * fontScale))
+    local plLo = math.max(11, math.floor(font.size * 0.95 * font.scale))
+    local plHi = math.max(16, math.floor(font.size * 1.7 * font.scale))
     add(".dbi-port .pl .v{font-size:clamp(" .. plLo .. "px,6.5cqw," .. plHi .. "px);")
-    add("font-weight:700;color:" .. ENERGY .. ";")
+    add("font-weight:700;color:" .. C.energy .. ";")
     add("text-shadow:0 0 8px rgba(251,124,0,0.6);white-space:nowrap;}")
 
         -- numeric mode: Base PL and Curr PL side by side in the same frame, so
@@ -1762,15 +1784,15 @@ local function css()
     add("gap:2px;min-width:0;}")
     add(".dbi-port .pl.nums .v{font-size:clamp(" .. math.max(10, math.floor(plLo * 0.8))
         .. "px,4.5cqw," .. math.max(13, math.floor(plHi * 0.75)) .. "px);}")
-    add(".dbi-port .pl .sep{color:" .. INK_DIM .. ";font-weight:400;}")
+    add(".dbi-port .pl .sep{color:" .. C.ink_dim .. ";font-weight:400;}")
 
         -- bars: thin, rounded, gradient into a glow
     add(".dbi-port .mt{display:flex;flex-direction:column;gap:4px;}")
     add(".dbi-port .mtl{display:flex;align-items:baseline;justify-content:space-between;")
     add("gap:6px;font-size:" .. barSize() .. "px;letter-spacing:0.14em;text-transform:uppercase;}")
-    add(".dbi-port .mtl .lbl{color:" .. INK_DIM .. ";}")
-    add(".dbi-port .mtl .num{color:" .. INK .. ";white-space:nowrap;}")
-    add(".dbi-port .mtl .pc{color:" .. INK_DIM .. ";margin-left:4px;}")
+    add(".dbi-port .mtl .lbl{color:" .. C.ink_dim .. ";}")
+    add(".dbi-port .mtl .num{color:" .. C.ink .. ";white-space:nowrap;}")
+    add(".dbi-port .mtl .pc{color:" .. C.ink_dim .. ";margin-left:4px;}")
     add(".dbi-port .trk{position:relative;height:8px;border-radius:999px;overflow:hidden;")
     add("background:rgba(0,0,0,0.5);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.05);}")
     add(".dbi-port .fil{position:absolute;top:0;bottom:0;left:0;border-radius:999px;")
@@ -1778,17 +1800,17 @@ local function css()
     add("box-shadow:0 0 8px 0 var(--c);")
     add("transition:width 500ms cubic-bezier(0.22,1,0.36,1);}")
 
-    add(".dbi-port .mt.lf{--c:" .. HP .. ";}")
-    add(".dbi-port .mt.ki{--c:" .. KI .. ";}")
-    add(".dbi-port .mt.ar{--c:" .. GOLD .. ";}")
+    add(".dbi-port .mt.lf{--c:" .. C.hp .. ";}")
+    add(".dbi-port .mt.ki{--c:" .. C.ki .. ";}")
+    add(".dbi-port .mt.ar{--c:" .. C.gold .. ";}")
     -- ki runs its own ramp, deep water into bright cyan, rather than the shared
     -- dark-into-colour one
     add(".dbi-port .mt.ki .fil{background:linear-gradient(90deg,#0a2c55,#0077cc 55%,#33c6ff);}")
-    add(".dbi-port .mt.pw{--c:" .. STAM .. ";}")
-    add(".dbi-port .mt.foe{--c:" .. FOE .. ";}")
-    add(".dbi-port .mt.warn{--c:" .. ENERGY .. ";}")
+    add(".dbi-port .mt.pw{--c:" .. C.stam .. ";}")
+    add(".dbi-port .mt.foe{--c:" .. C.foe .. ";}")
+    add(".dbi-port .mt.warn{--c:" .. C.energy .. ";}")
     add(".dbi-port .mt.low{--c:#e05a10;}")
-    add(".dbi-port .mt.crit{--c:" .. HP .. ";}")
+    add(".dbi-port .mt.crit{--c:" .. C.hp .. ";}")
     add(".dbi-port .mt.low .pc,.dbi-port .mt.crit .pc{color:var(--c);}")
     add("@keyframes hudBreathe{0%,100%{opacity:1}50%{opacity:0.55}}")
     add("@keyframes hudFlash{0%,100%{opacity:1}50%{opacity:0.4}}")
@@ -1801,22 +1823,22 @@ local function css()
 
         -- attributes: two columns, label left, value right
     add(".dbi-port .attrs{display:grid;grid-template-columns:1fr 1fr;")
-    add("gap:5px 12px;padding-top:10px;border-top:1px solid " .. RULE .. ";}")
+    add("gap:5px 12px;padding-top:10px;border-top:1px solid " .. C.rule .. ";}")
     add(".dbi-port .attr{display:flex;align-items:baseline;justify-content:space-between;gap:6px;}")
     add(".dbi-port .attr .k{font-size:" .. barSize() .. "px;letter-spacing:0.12em;")
-    add("text-transform:uppercase;color:" .. INK_DIM .. ";}")
-    add(".dbi-port .attr .v{font-size:" .. bodySize() .. "px;color:" .. INK .. ";")
+    add("text-transform:uppercase;color:" .. C.ink_dim .. ";}")
+    add(".dbi-port .attr .v{font-size:" .. bodySize() .. "px;color:" .. C.ink .. ";")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
 
         -- status pills
     add(".dbi-port .pills{display:flex;flex-wrap:wrap;gap:5px;padding-top:10px;")
-    add("border-top:1px solid " .. RULE .. ";}")
+    add("border-top:1px solid " .. C.rule .. ";}")
     add(".dbi-port .pill{font-size:" .. barSize() .. "px;font-weight:600;letter-spacing:0.1em;")
     add("text-transform:uppercase;padding:2px 6px;border-radius:3px;")
-    add("border:1px solid rgba(0,172,243,0.4);color:" .. KI .. ";background:rgba(0,172,243,0.1);}")
-    add(".dbi-port .pill.good{border-color:rgba(94,201,102,0.4);color:" .. STAM .. ";")
+    add("border:1px solid rgba(0,172,243,0.4);color:" .. C.ki .. ";background:rgba(0,172,243,0.1);}")
+    add(".dbi-port .pill.good{border-color:rgba(94,201,102,0.4);color:" .. C.stam .. ";")
     add("background:rgba(94,201,102,0.1);}")
-    add(".dbi-port .pill.bad{border-color:rgba(234,60,63,0.4);color:" .. HP .. ";")
+    add(".dbi-port .pill.bad{border-color:rgba(234,60,63,0.4);color:" .. C.hp .. ";")
     add("background:rgba(234,60,63,0.1);}")
 
         -- The opponent sits apart from your own vitals, and larger: this is the
@@ -1824,18 +1846,18 @@ local function css()
         -- figure. 'foeblk' rather than 'foe' -- the bar's own kind is already
         -- 'foe', and a wrapper sharing that name is how the power bar once
         -- inherited the power-level box's border and stopped looking like a bar.
-    add(".dbi-port .foeblk{padding-top:10px;border-top:1px solid " .. RULE .. ";}")
+    add(".dbi-port .foeblk{padding-top:10px;border-top:1px solid " .. C.rule .. ";}")
     add(".dbi-port .foeblk .trk{height:16px;}")
     add(".dbi-port .foeblk .mtl{font-size:" .. bodySize() .. "px;}")
-    add(".dbi-port .foeblk .mtl .num{font-weight:700;color:" .. FOE .. ";}")
+    add(".dbi-port .foeblk .mtl .num{font-weight:700;color:" .. C.foe .. ";}")
 
         -- sheet
     add(".dbi-port table{width:100%;table-layout:fixed;border-collapse:collapse;")
     add("font-size:" .. bodySize() .. "px;}")
     add(".dbi-port td{padding:1px 0;vertical-align:top;}")
-    add(".dbi-port td.k{width:40%;color:" .. INK_DIM .. ";padding-right:10px;")
+    add(".dbi-port td.k{width:40%;color:" .. C.ink_dim .. ";padding-right:10px;")
     add("overflow-wrap:anywhere;}")
-    add(".dbi-port td.v{text-align:right;color:" .. INK .. ";overflow-wrap:anywhere;}")
+    add(".dbi-port td.v{text-align:right;color:" .. C.ink .. ";overflow-wrap:anywhere;}")
     add(".dbi-port table td{line-height:1.35;}")
     add(".dbi-port .cfg{gap:2px;}")
     add(".dbi-port .crow{display:flex;align-items:center;gap:6px;margin:0;")
@@ -1848,7 +1870,7 @@ local function css()
     add(".dbi-port .crow input{flex:1 1 auto;min-width:0;background:rgba(0,0,0,0.35);")
     add("border:1px solid rgba(255,255,255,0.18);border-radius:3px;color:inherit;")
     add("font:inherit;font-size:" .. barSize() .. "px;padding:2px 5px;outline:none;}")
-    add(".dbi-port .crow input:focus{border-color:" .. ENERGY .. ";}")
+    add(".dbi-port .crow input:focus{border-color:" .. C.energy .. ";}")
     -- The add-a-form row: three fields stacked, because the announcement is a
     -- whole sentence of the MUD's prose and will not share a line.
     add(".dbi-port .cfrm{display:flex;flex-direction:column;gap:4px;")
@@ -1857,21 +1879,21 @@ local function css()
     add(".dbi-port .cfrm input{background:rgba(0,0,0,0.35);")
     add("border:1px solid rgba(255,255,255,0.18);border-radius:3px;color:inherit;")
     add("font:inherit;font-size:" .. barSize() .. "px;padding:2px 5px;outline:none;}")
-    add(".dbi-port .cfrm input:focus{border-color:" .. ENERGY .. ";}")
+    add(".dbi-port .cfrm input:focus{border-color:" .. C.energy .. ";}")
     add(".dbi-port .cfrm .tb{align-self:flex-end;}")
     -- The stored announcement, whole. It is what the match runs against, so a
     -- truncated one on screen would hide the reason a form is not firing.
     add(".dbi-port .fpat{font-size:" .. math.max(8, barSize() - 1) .. "px;")
     add("opacity:0.55;line-height:1.25;margin:0 0 5px 6px;word-break:break-word;}")
-    add(".dbi-port .fon{color:" .. ENERGY .. ";font-size:"
+    add(".dbi-port .fon{color:" .. C.energy .. ";font-size:"
         .. math.max(8, barSize() - 1) .. "px;}")
     add(".dbi-port .sec{margin:10px 0 3px;font-size:" .. barSize() .. "px;font-weight:600;")
-    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. ENERGY .. ";")
-    add("border-bottom:1px solid " .. RULE .. ";padding-bottom:3px;}")
+    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. C.energy .. ";")
+    add("border-bottom:1px solid " .. C.rule .. ";padding-bottom:3px;}")
 
     add(".dbi-port .idle{padding:14px 10px;font-size:" .. bodySize() .. "px;")
-    add("line-height:1.7;color:" .. INK_DIM .. ";}")
-    add(".dbi-port .idle b{color:" .. ENERGY .. ";}")
+    add("line-height:1.7;color:" .. C.ink_dim .. ";}")
+    add(".dbi-port .idle b{color:" .. C.energy .. ";}")
 
         -- Narrow: the numbers go, then the second attribute column. The enemy
         -- keeps its figure -- your own bars still show a percentage in .pc, but
@@ -1888,9 +1910,9 @@ end
 -- Colour follows how much is left, not what the bar measures: full is the
 -- meter's own colour, and everything below LV_WARN walks yellow, orange, red.
 local function levelOf(p)
-    if p <= LV_CRIT then return " crit" end
-    if p <= LV_LOW then return " low" end
-    if p <= LV_WARN then return " warn" end
+    if p <= LV.crit then return " crit" end
+    if p <= LV.low then return " low" end
+    if p <= LV.warn then return " warn" end
     return ""
 end
 
@@ -3015,7 +3037,7 @@ local function cfgBody()
     add('<div class="sec">display</div>')
     add('<div class="crow"><span class="ck">prompt gag</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="gag">'
-        .. onoff(gagPrompt) .. "</span></div>")
+        .. onoff(gag.on) .. "</span></div>")
     add('<div class="crow"><span class="ck">hide captured lists</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="itemsgag">'
         .. onoff(itemsGag) .. "</span></div>")
@@ -3025,7 +3047,7 @@ local function cfgBody()
 
     add('<div class="crow"><span class="ck">text size</span>')
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font-">-</span>')
-    add('<span class="cv">' .. math.floor(fontScale * 100 + 0.5) .. "%</span>")
+    add('<span class="cv">' .. math.floor(font.scale * 100 + 0.5) .. "%</span>")
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font+">+</span></div>')
 
     add('<div class="crow"><span class="ck">opacity</span>')
@@ -3507,14 +3529,14 @@ local function saveSettings()
             stamp = numSave.stamp,
             view = view,
             plMode = plMode,
-            fontScale = tostring(fontScale),
-            gagPrompt = gagPrompt and "yes" or "no",
+            fontScale = tostring(font.scale),
+            gagPrompt = gag.on and "yes" or "no",
             itemsGag = itemsGag and "yes" or "no",
             containers = isCont,
             panelAlpha = tostring(panelAlpha),
             profiles = keep,
             last = lastOut,
-            prompts = promptLearned,
+            prompts = prompt.learned,
             promptFmt = learnedFor.prompt,
             fpromptFmt = learnedFor.fprompt,
         }
@@ -3726,14 +3748,14 @@ end
 -- Re-armed whenever the label changes, so turning the gag on before the first
 -- prompt has been seen still ends up matching the right one.
 local function applyGag()
-    for _, id in ipairs(gagIds) do
+    for _, id in ipairs(gag.ids) do
         pcall(function() removeTrigger(id) end)
     end
-    gagIds = {}
-    gagTriggerId = nil
-    gagTag = ""
-    gagSig = ""
-    if not gagPrompt then return end
+    gag.ids = {}
+    gag.triggerId = nil
+    gag.tag = ""
+    gag.sig = ""
+    if not gag.on then return end
 
     -- Hiding is done HERE, with a nil callback, and reading is done in
     -- armPrompt, with a callback and no omitFromOutput. They are deliberately
@@ -3747,16 +3769,16 @@ local function applyGag()
     -- Safe to arm all of them only because each pattern is anchored at both
     -- ends: someone pasting their prompt at you sits mid-line inside a tell and
     -- cannot match.
-    if type(promptSet) == "table" then
-        for _, m in ipairs(promptSet) do
+    if type(prompt.set) == "table" then
+        for _, m in ipairs(prompt.set) do
             if type(m.rx) == "string" and #m.rx <= PAT_MAX then
                 local id = addTrigger(m.rx, nil,
                     { type = "regex", omitFromOutput = true, priority = 90 })
-                if id then gagIds[#gagIds + 1] = id end
+                if id then gag.ids[#gag.ids + 1] = id end
             end
         end
     end
-    gagSig = promptSig
+    gag.sig = prompt.sig
 
     -- The original test as well, always, not only when nothing compiled. A
     -- player whose prompt no format describes still gets gagged, and seeing one
@@ -3774,13 +3796,13 @@ local function applyGag()
     --
     -- and gagging that took a row nothing parses straight out of the scroll,
     -- invisibly, because gagging never reaches onLine.
-    gagTag = promptTag
-    if gagTag ~= "" then
-        local id = addTrigger(gagTag .. ".*[Kk][Ii]:", nil,
+    gag.tag = prompt.tag
+    if gag.tag ~= "" then
+        local id = addTrigger(gag.tag .. ".*[Kk][Ii]:", nil,
             { type = "regex", omitFromOutput = true, priority = 90 })
-        if id then gagIds[#gagIds + 1] = id end
+        if id then gag.ids[#gag.ids + 1] = id end
     end
-    gagTriggerId = gagIds[1]
+    gag.triggerId = gag.ids[1]
 end
 
 -- One trigger per line of every format, each anchored at both ends so nothing
@@ -3912,14 +3934,14 @@ local function promptFeed(m, captures, line)
 end
 
 armPrompt = function()
-    for _, id in ipairs(promptTrigIds) do
+    for _, id in ipairs(prompt.trigIds) do
         pcall(function() removeTrigger(id) end)
     end
-    promptTrigIds = {}
-    if not promptSet then promptRebuild() end
-    if type(promptSet) ~= "table" then return end
+    prompt.trigIds = {}
+    if not prompt.set then promptRebuild() end
+    if type(prompt.set) ~= "table" then return end
 
-    for _, m in ipairs(promptSet) do
+    for _, m in ipairs(prompt.set) do
         if type(m.rx) == "string" and #m.rx <= PAT_MAX then
             local mine = m
             -- No omitFromOutput here, deliberately, whatever the gag setting
@@ -3931,7 +3953,7 @@ armPrompt = function()
             local id = addTrigger(m.rx, function(captures, line)
                 promptFeed(mine, captures, line)
             end, { type = "regex", priority = 90 })
-            if id then promptTrigIds[#promptTrigIds + 1] = id end
+            if id then prompt.trigIds[#prompt.trigIds + 1] = id end
         end
     end
 end
@@ -3953,12 +3975,12 @@ local function makeWidget()
         appearance = { showTitleBar = false, autoHideSettingsCog = true },
     })
     setWidgetAppearance(widget, {
-        backgroundColor   = PANEL_BG,
+        backgroundColor   = C.panel_bg,
         backgroundOpacity = panelAlpha,
-        borderColor       = ENERGY,
+        borderColor       = C.energy,
         borderWidth       = 2,
         borderRadius      = 10,
-        borderGradient    = "linear-gradient(135deg," .. ENERGY .. ",#8a4400 60%,#2a1400)",
+        borderGradient    = "linear-gradient(135deg," .. C.energy .. ",#8a4400 60%,#2a1400)",
         borderShadow      = "0 0 22px -4px rgba(251,124,0,0.45)",
     })
 
@@ -4011,7 +4033,7 @@ local function makeWidget()
                 -- exactly like one that did not save at all.
                 local who = profileKey
                 if who == "" then who = "this session (no score read yet)" end
-                echo(TAG .. "settings saved for " .. who .. ".", ENERGY)
+                echo(TAG .. "settings saved for " .. who .. ".", C.energy)
             end
 
 
@@ -4114,7 +4136,7 @@ local function makeWidget()
             local txt = trimBoth(edit[which] or "")
             if txt == "" then
                 echo(TAG .. "type the format first -- the %-tokens, as you set "
-                    .. "them on the MUD.", ENERGY)
+                    .. "them on the MUD.", C.energy)
             elseif promptCompile(txt) == nil then
                 echo(TAG .. "that does not compile as a prompt format. It needs "
                     .. "at least one %-token.", "#ff6666")
@@ -4127,7 +4149,7 @@ local function makeWidget()
                 learnedFor[which] = bare
                 promptLearn(bare, true)
                 edit[which] = ""
-                echo(TAG .. which .. " set to: " .. txt, ENERGY)
+                echo(TAG .. which .. " set to: " .. txt, C.energy)
                 safeRender(true)
                 saveSettings()
             end
@@ -4139,11 +4161,11 @@ local function makeWidget()
             local which = arg
             if which ~= "prompt" and which ~= "fprompt" then which = "prompt" end
             pcall(function() send(which) end)
-            echo(TAG .. "asked the MUD for your " .. which .. ".", ENERGY)
+            echo(TAG .. "asked the MUD for your " .. which .. ".", C.energy)
 
         elseif act == "cfgtog" then
             if arg == "gag" then
-                gagPrompt = not gagPrompt
+                gag.on = not gag.on
                 applyGag()
             elseif arg == "itemsgag" then
                 itemsGag = not itemsGag
@@ -4154,8 +4176,8 @@ local function makeWidget()
             saveSettings()
 
         elseif act == "cfgnudge" then
-            if arg == "font-" then fontScale = math.max(0.5, fontScale - 0.1) end
-            if arg == "font+" then fontScale = math.min(2, fontScale + 0.1) end
+            if arg == "font-" then font.scale = math.max(0.5, font.scale - 0.1) end
+            if arg == "font+" then font.scale = math.min(2, font.scale + 0.1) end
             if arg == "alpha-" then panelAlpha = math.max(0, panelAlpha - 0.05) end
             if arg == "alpha+" then panelAlpha = math.min(1, panelAlpha + 0.05) end
             applyAlpha()
@@ -4315,7 +4337,7 @@ local function printDiag()
     local raw = getGMCPData("char")
     print(TAG .. "char package present=" .. tostring(type(raw) == "table")
         .. " char.vitals present=" .. tostring(type(getGMCPData("char.vitals")) == "table"))
-    print(TAG .. "connected=" .. tostring(negoConnected)
+    print(TAG .. "connected=" .. tostring(nego.connected)
         .. " vitalsSeen=" .. tostring(vit ~= nil)
         .. " scoreSeen=" .. tostring(scoreSeen)
         .. " parsing=" .. tostring(inScore))
@@ -4336,20 +4358,20 @@ local function printDiag()
     print(TAG .. "read off it: " .. tostring(foe.got)
         .. "  held at clock " .. tostring(foe.at))
     print(TAG .. "opponent last cleared by: " .. tostring(foe.why))
-    print(TAG .. "fontScale=" .. fontScale .. " gagPrompt=" .. tostring(gagPrompt)
+    print(TAG .. "fontScale=" .. font.scale .. " gagPrompt=" .. tostring(gag.on)
         .. " feedCalls=" .. tostring(feedCalls)
         .. " esc=[" .. tostring(promptRx("(a|b)")) .. "]"
         .. " capFirst=" .. tostring(capFirst)
-        .. " promptTrigs=" .. tostring(#promptTrigIds)
-        .. " compiled=" .. tostring(promptSet and #promptSet or -1)
+        .. " promptTrigs=" .. tostring(#prompt.trigIds)
+        .. " compiled=" .. tostring(prompt.set and #prompt.set or -1)
         .. " luaTries=" .. tostring(pd.tries)
         .. " luaHits=" .. tostring(pd.hits)
         .. " buildErr=" .. tostring(pd.buildErr or "none")
         .. " readErr=" .. tostring(pd.readErr or "none")
-        .. " gagTriggers=" .. tostring(#gagIds)
-        .. " formatsArmed=" .. tostring(#promptOrder)
-        .. " learned=" .. tostring(#promptLearned)
-        .. " promptTag=" .. promptTag .. " gagTag=" .. (gagTag ~= "" and gagTag or "(none)"))
+        .. " gagTriggers=" .. tostring(#gag.ids)
+        .. " formatsArmed=" .. tostring(#prompt.order)
+        .. " learned=" .. tostring(#prompt.learned)
+        .. " promptTag=" .. prompt.tag .. " gagTag=" .. (gag.tag ~= "" and gag.tag or "(none)"))
 
     local formCount = 0
     for _ in pairs(FORMS) do formCount = formCount + 1 end
@@ -4394,14 +4416,14 @@ local function printDiag()
         .. "  last line while armed: [" .. tostring(capSaw) .. "]")
 
     print(TAG .. "Prompt Triggers")
-    if type(promptSet) ~= "table" or #promptSet == 0 then
+    if type(prompt.set) ~= "table" or #prompt.set == 0 then
         print("   (none compiled)")
     else
         -- promptSet is ordered longest-pattern-first because that is what
         -- matching needs. Reading it wants format order and then line order, so
         -- the display sorts its own copy.
         local shownList = {}
-        for _, m in ipairs(promptSet) do shownList[#shownList + 1] = m end
+        for _, m in ipairs(prompt.set) do shownList[#shownList + 1] = m end
         table.sort(shownList, function(l, r)
             if l.fmt ~= r.fmt then return tostring(l.fmt) < tostring(r.fmt) end
             return (l.lineNo or 0) < (r.lineNo or 0)
@@ -4414,8 +4436,8 @@ local function printDiag()
                 print("   " .. tostring(m.fmt))
             end
             local mark = ""
-            if gagPrompt then mark = "  [gagging]" end
-            if promptUsed[m.rx] then mark = mark .. " [seen]" end
+            if gag.on then mark = "  [gagging]" end
+            if prompt.used[m.rx] then mark = mark .. " [seen]" end
             print("     Line " .. tostring(m.lineNo)
                 .. "   hits=" .. tostring(m.hits or 0) .. mark)
             print("       " .. tostring(m.rx))
@@ -4505,18 +4527,18 @@ local function charCommand(args)
         saveSettings()
         if itemsGag then
             echo(TAG .. "captured lists are hidden from the main window; the "
-                .. "tabs still fill in.", ENERGY)
+                .. "tabs still fill in.", C.energy)
         else
-            echo(TAG .. "captured lists show in the main window as usual.", ENERGY)
+            echo(TAG .. "captured lists show in the main window as usual.", C.energy)
         end
 
     elseif low == "items trace on" or low == "items trace off" then
         itemsTrace = (low == "items trace on")
         if itemsTrace then
             echo(TAG .. "every 'You ' line will say what the item reader made "
-                .. "of it. 'dbchar items trace off' when you have seen enough.", ENERGY)
+                .. "of it. 'dbchar items trace off' when you have seen enough.", C.energy)
         else
-            echo(TAG .. "item reader is quiet again.", ENERGY)
+            echo(TAG .. "item reader is quiet again.", C.energy)
         end
 
     elseif low == "items list" then
@@ -4561,17 +4583,17 @@ local function charCommand(args)
         for k in pairs(anaOf) do anaOf[k] = nil end
         for k in pairs(anaOpen) do anaOpen[k] = nil end
         safeRender(true)
-        echo(TAG .. "captured lists dropped.", ENERGY)
+        echo(TAG .. "captured lists dropped.", C.energy)
 
     elseif low:sub(1, 7) == "avatar " then
         local url = trimBoth(cmd:sub(8))
         if url == "clear" then
             avatarUrl = ""
-            echo(TAG .. "back to the race avatar.", ENERGY)
+            echo(TAG .. "back to the race avatar.", C.energy)
         else
             applyImage(url, function(clean)
                 avatarUrl = clean
-                echo(TAG .. "avatar set: " .. clean, ENERGY)
+                echo(TAG .. "avatar set: " .. clean, C.energy)
                 saveSettings()
                 safeRender(true)
             end)
@@ -4593,11 +4615,11 @@ local function charCommand(args)
         local n = trimBoth(cmd:sub(6))
         if n == "clear" then
             nameOverride = ""
-            echo(TAG .. "name back to what score reports.", ENERGY)
+            echo(TAG .. "name back to what score reports.", C.energy)
         else
             nameOverride = n
             sc.name = n
-            echo(TAG .. "name set to " .. n .. ".", ENERGY)
+            echo(TAG .. "name set to " .. n .. ".", C.energy)
         end
         saveSettings()
         safeRender(true)
@@ -4606,36 +4628,36 @@ local function charCommand(args)
         if plMode == "nums" then plMode = "bar" else plMode = "nums" end
         saveSettings()
         safeRender(true)
-        echo(TAG .. "power display: " .. plMode, ENERGY)
+        echo(TAG .. "power display: " .. plMode, C.energy)
     elseif low:sub(1, 5) == "font " then
         local spec = trimBoth(low:sub(6))
         if spec == "+" then
-            fontScale = math.min(2, fontScale + 0.1)
+            font.scale = math.min(2, font.scale + 0.1)
         elseif spec == "-" then
-            fontScale = math.max(0.5, fontScale - 0.1)
+            font.scale = math.max(0.5, font.scale - 0.1)
         else
             local n = safeNum(spec)
             if not n or n < 50 or n > 200 then
                 echo(TAG .. "font takes +, - or a percent 50-200.", "#ff6666")
                 return
             end
-            fontScale = n / 100
+            font.scale = n / 100
         end
         -- one decimal, so the +/- steps land on clean values
-        fontScale = math.floor(fontScale * 10 + 0.5) / 10
+        font.scale = math.floor(font.scale * 10 + 0.5) / 10
         saveSettings()
         safeRender(true)
-        echo(TAG .. "font " .. math.floor(fontScale * 100 + 0.5) .. "%", ENERGY)
+        echo(TAG .. "font " .. math.floor(font.scale * 100 + 0.5) .. "%", C.energy)
     elseif low == "gag on" or low == "gag off" then
-        gagPrompt = (low == "gag on")
+        gag.on = (low == "gag on")
         saveSettings()
         applyGag()
         armPrompt()
-        if gagPrompt then
-            echo(TAG .. "hiding prompt lines matching '" .. promptTag
-                .. "' from the main window.", ENERGY)
+        if gag.on then
+            echo(TAG .. "hiding prompt lines matching '" .. prompt.tag
+                .. "' from the main window.", C.energy)
         else
-            echo(TAG .. "the prompt line shows in the main window.", ENERGY)
+            echo(TAG .. "the prompt line shows in the main window.", C.energy)
         end
 
     elseif low == "forms" then
@@ -4644,12 +4666,12 @@ local function charCommand(args)
             n = n + 1
             local marker = ""
             if name == formName then marker = "   <- active" end
-            echo(TAG .. name .. "  " .. f.url .. marker, ENERGY)
-            echo("           when a line contains: " .. f.pat, INK_DIM)
+            echo(TAG .. name .. "  " .. f.url .. marker, C.energy)
+            echo("           when a line contains: " .. f.pat, C.ink_dim)
         end
         if n == 0 then
-            echo(TAG .. "no forms yet. Add one on the settings screen (the gear),", ENERGY)
-            echo("           or: dbchar form <name> <url|base> <message>", ENERGY)
+            echo(TAG .. "no forms yet. Add one on the settings screen (the gear),", C.energy)
+            echo("           or: dbchar form <name> <url|base> <message>", C.energy)
         end
 
     elseif low:sub(1, 5) == "form " then
@@ -4680,7 +4702,7 @@ local function charCommand(args)
             saveSettings()
             safeRender(true)
             echo(TAG .. "form " .. key .. " set to base. It clears the portrait "
-                .. "when a line contains: " .. said, ENERGY)
+                .. "when a line contains: " .. said, C.energy)
             return
         end
 
@@ -4688,8 +4710,8 @@ local function charCommand(args)
             FORMS[key] = { pat = said, url = clean }
             saveSettings()
             safeRender(true)
-            echo(TAG .. "form " .. key .. " set: " .. clean, ENERGY)
-            echo(TAG .. "it shows when a line contains: " .. said, ENERGY)
+            echo(TAG .. "form " .. key .. " set: " .. clean, C.energy)
+            echo(TAG .. "it shows when a line contains: " .. said, C.energy)
         end)
 
     elseif low == "formfix" then
@@ -4707,11 +4729,11 @@ local function charCommand(args)
             end
         end
         if #todo == 0 then
-            echo(TAG .. "every form already points at an image file.", ENERGY)
+            echo(TAG .. "every form already points at an image file.", C.energy)
             return
         end
         echo(TAG .. #todo .. " form(s) point at a page rather than an image. "
-            .. "Asking each one...", ENERGY)
+            .. "Asking each one...", C.energy)
         for _, fnm in ipairs(todo) do
             local frec = FORMS[fnm]
             applyImage(frec.url, function(clean)
@@ -4722,7 +4744,7 @@ local function charCommand(args)
                 now.url = clean
                 saveSettings()
                 safeRender(true)
-                echo(TAG .. fnm .. " -> " .. clean, ENERGY)
+                echo(TAG .. fnm .. " -> " .. clean, C.energy)
             end)
         end
 
@@ -4745,14 +4767,14 @@ local function charCommand(args)
         end
         saveSettings()
         safeRender(true)
-        echo(TAG .. "form " .. name .. " removed.", ENERGY)
+        echo(TAG .. "form " .. name .. " removed.", C.energy)
 
     elseif low == "base" then
         -- manual reset, for a revert line that was missed or never set
         formUrl = ""
         formName = ""
         safeRender(true)
-        echo(TAG .. "back to the base portrait.", ENERGY)
+        echo(TAG .. "back to the base portrait.", C.energy)
 
     elseif low == "diag" then
         printDiag()
@@ -4783,7 +4805,7 @@ local function charCommand(args)
                 end
                 echo(TAG .. "before: " .. pair[1] .. " profiles=" .. pc
                     .. " last=" .. tostring(t.last) .. " forms[" .. profileKey
-                    .. "]=" .. fc, ENERGY)
+                    .. "]=" .. fc, C.energy)
             end
         end
 
@@ -4802,7 +4824,7 @@ local function charCommand(args)
             echo(TAG .. "The write is not landing. Everything below is the OLD "
                 .. "contents.", "#ff6666")
         else
-            echo(TAG .. "store ok -- the write came back byte for byte.", ENERGY)
+            echo(TAG .. "store ok -- the write came back byte for byte.", C.energy)
         end
 
         -- and what is actually in there, whichever way that went
@@ -4812,31 +4834,31 @@ local function charCommand(args)
         if type(mine) == "table" then
             for _ in pairs(mine.forms or {}) do fn = fn + 1 end
         end
-        echo(TAG .. "on disk: profiles=" .. pn .. " last=" .. tostring(back.last), ENERGY)
+        echo(TAG .. "on disk: profiles=" .. pn .. " last=" .. tostring(back.last), C.energy)
         echo(TAG .. "  for [" .. profileKey .. "]: forms=" .. fn
-            .. " avatar=" .. tostring(type(mine) == "table" and mine.avatarUrl or "-"), ENERGY)
+            .. " avatar=" .. tostring(type(mine) == "table" and mine.avatarUrl or "-"), C.energy)
         echo(TAG .. "in memory: forms=" .. tostring(formCountNow())
-            .. " avatar=" .. tostring(avatarUrl), ENERGY)
+            .. " avatar=" .. tostring(avatarUrl), C.energy)
 
     elseif low == "probe" then
         printProbe()
     else
-        echo(TAG .. "dbchar show | hide | pl", ENERGY)
-        echo("          the tabs under the portrait pick the view", INK_DIM)
-        echo("          the gear opens settings -- everything below is on it", INK_DIM)
-        echo("          dbchar font +|-|<50-200>   text size (saved)", ENERGY)
-        echo("          dbchar gag on|off          hide the prompt line", ENERGY)
-        echo("          dbchar avatar <http(s) url>|clear", ENERGY)
-        echo("          dbchar form <name> <url|base> <message>", ENERGY)
-        echo("          dbchar forms | unform <name> | base", ENERGY)
-        echo("          dbchar formfix             re-ask share pages for the image", ENERGY)
-        echo("          dbchar name <name>|clear", ENERGY)
-        echo("          dbchar items gag on|off      hide captured lists", ENERGY)
-        echo("          dbchar items list            print the rows as stored", ENERGY)
-        echo("          dbchar items trace on|off    say what each line did", ENERGY)
-        echo("          dbchar items clear           forget them", ENERGY)
-        echo("          dbchar storecheck          prove a write survives", ENERGY)
-        echo("          dbchar opacity <0-100> | diag | probe", ENERGY)
+        echo(TAG .. "dbchar show | hide | pl", C.energy)
+        echo("          the tabs under the portrait pick the view", C.ink_dim)
+        echo("          the gear opens settings -- everything below is on it", C.ink_dim)
+        echo("          dbchar font +|-|<50-200>   text size (saved)", C.energy)
+        echo("          dbchar gag on|off          hide the prompt line", C.energy)
+        echo("          dbchar avatar <http(s) url>|clear", C.energy)
+        echo("          dbchar form <name> <url|base> <message>", C.energy)
+        echo("          dbchar forms | unform <name> | base", C.energy)
+        echo("          dbchar formfix             re-ask share pages for the image", C.energy)
+        echo("          dbchar name <name>|clear", C.energy)
+        echo("          dbchar items gag on|off      hide captured lists", C.energy)
+        echo("          dbchar items list            print the rows as stored", C.energy)
+        echo("          dbchar items trace on|off    say what each line did", C.energy)
+        echo("          dbchar items clear           forget them", C.energy)
+        echo("          dbchar storecheck          prove a write survives", C.energy)
+        echo("          dbchar opacity <0-100> | diag | probe", C.energy)
     end
 end
 
@@ -4939,7 +4961,7 @@ function init()
 
     -- Restored before anything can read a prompt, so a returning session knows
     -- its own format on the first line rather than after seeing one.
-    promptLearned = promptsFrom(p.prompts)
+    prompt.learned = promptsFrom(p.prompts)
     -- Revalidated the same way the list is: a stored string that no longer
     -- compiles is dropped rather than shown as if it were live.
     if type(p.promptFmt) == "string" and promptCompile(p.promptFmt) then
@@ -4964,11 +4986,11 @@ function init()
 
     local fsc = safeNum(p.fontScale)
     if not fsc then fsc = safeNum(getVariable("fontScale")) end
-    if fsc and fsc >= 0.5 and fsc <= 2 then fontScale = fsc end
+    if fsc and fsc >= 0.5 and fsc <= 2 then font.scale = fsc end
 
     local gp = p.gagPrompt
     if not has(gp) then gp = getVariable("gagPrompt") end
-    if gp == "yes" then gagPrompt = true end
+    if gp == "yes" then gag.on = true end
 
     if p.itemsGag == "yes" then itemsGag = true end
 
@@ -5154,7 +5176,7 @@ function init()
             saveSettings()
             echo(TAG .. "picked up " .. profileKey .. "'s settings "
                 .. tostring(waits[step]) .. "ms in ("
-                .. formCountNow() .. " form(s)).", ENERGY)
+                .. formCountNow() .. " form(s)).", C.energy)
         end
         pcall(function() addTimer(waits[1], function() tryLate(1) end) end)
     end
@@ -5187,7 +5209,7 @@ function init()
 
     setVariable("instance", INSTANCE)
     pcall(setVariable, "instanceAt", tostring(INSTANCE_AT))
-    negoConnected = true
+    nego.connected = true
 
     tickTimer = addTimer(1000, function()
         -- Reload guard, fail OPEN. The string-equality check this replaces
@@ -5221,14 +5243,14 @@ function init()
             safeRender()
         end
 
-        if not negoConnected then return end
+        if not nego.connected then return end
 
-        negoTick = negoTick + 1
+        nego.tick = nego.tick + 1
         -- staggered a second behind Scouter so its stamp is already down and
         -- only one Core.Hello goes out when both are installed
-        if negoTick == 3 then ensureGmcp() end
+        if nego.tick == 3 then ensureGmcp() end
         -- a packet may already be sitting in the store from before we subscribed
-        if negoTick == 4 or negoTick == 10 then
+        if nego.tick == 4 or nego.tick == 10 then
             if acceptVitals(nil) then safeRender() end
         end
         -- Nothing is sent from here. This used to fire one unsolicited 'score'
@@ -5247,8 +5269,8 @@ function init()
 end
 
 function onConnect(sessionId)
-    negoConnected = true
-    negoTick = 0
+    nego.connected = true
+    nego.tick = 0
     vit = nil
     foe.val = nil
     foe.why = "reconnected"
@@ -5265,7 +5287,7 @@ function onConnect(sessionId)
 end
 
 function onDisconnect(sessionId)
-    negoConnected = false
+    nego.connected = false
 end
 
 -- Read, never rewritten. The only line that can disappear is the prompt, and
@@ -5291,8 +5313,8 @@ function onLine(sessionId, rawLine, cleanLine)
         -- The blank line a prompt format ending in '%Y' leaves behind. Only the
         -- one, and only straight after such a prompt.
         if clean == "" then
-            if gagPrompt and promptBlank then drop = true end
-            promptBlank = false
+            if gag.on and prompt.blank then drop = true end
+            prompt.blank = false
             return
         end
 
@@ -5309,7 +5331,7 @@ function onLine(sessionId, rawLine, cleanLine)
             local low = clean:lower()
             if low:find("default prompt", 1, true) then
                 echo(TAG .. "that is the stock prompt, which is already known.",
-                    ENERGY)
+                    C.energy)
             -- Plain find rather than the pattern '%%'. Not a fix: diag showed
             -- learned=4 with both formats captured, so the pattern form works.
             -- Kept because a plain find cannot be translated wrong, and this
@@ -5370,7 +5392,7 @@ function onLine(sessionId, rawLine, cleanLine)
         -- The first prompt names the label this session uses. If the gag was
         -- turned on before that -- or armed against the other format -- re-arm
         -- it now that the MUD has said which one it is.
-        if gagPrompt and (gagTag ~= promptTag or gagSig ~= promptSig) then
+        if gag.on and (gag.tag ~= prompt.tag or gag.sig ~= prompt.sig) then
             applyGag()
         end
 
