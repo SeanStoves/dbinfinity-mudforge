@@ -22,9 +22,15 @@ nothing rewrites nothing:
     second change today         -> 2026.08.15.001
     first change tomorrow       -> 2026.08.16.000
 
-If the version line in the .lua was edited by hand it is taken as-is and
-nothing is computed. That way a deliberate version always wins over the clock,
-and the automation cannot argue with an author who has already decided.
+The version line in the .lua is NOT consulted. Whatever it says, a changed
+script gets today's number and an unchanged one keeps what is published.
+
+That is deliberate, and it is the second design here: the first let a
+hand-edited version through on the grounds that an author who had decided
+should win. Then a pull request arrived setting 0.51.0 against a published
+2026.08.15.000, and it would have sailed through and taken the scheme with it.
+A contributor cannot be expected to know the convention, and a scheme that any
+single edit can quietly opt out of is not one.
 
 Run: python3 tools/pack.py [--check]
 
@@ -63,6 +69,15 @@ CATALOGUE = {
 }
 
 VERSION_RE = re.compile(r'^(\s*version\s*=\s*")([^"]*)(")', re.M)
+
+
+def masked(script):
+    """The script with its version line masked.
+
+    Scripts are compared this way so that editing the version and nothing else
+    is not a release. The line is part of the file, so a plain comparison
+    counts a header fiddle as a change and cuts a version for it."""
+    return VERSION_RE.sub(lambda m: m.group(1) + "?" + m.group(3), script, count=1)
 DATED_RE = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\.(\d{3})$")
 
 
@@ -127,20 +142,30 @@ def main():
                 old = json.load(fh)
             old_script, old_version = old.get("script"), old.get("version")
 
-        # A hand-edited version wins. Only when the author left it alone AND
-        # the script moved does the clock get a say.
-        if old_version is not None and meta["version"] == old_version \
-                and old_script is not None and script != old_script:
+        # The script decides, never the version line. A plugin whose script
+        # moved gets today's number; one that did not keeps what is published,
+        # whatever its own header happens to say.
+        if old_script is None or masked(script) != masked(old_script):
             fresh = next_version(old_version, today)
-            script = VERSION_RE.sub(lambda m: m.group(1) + fresh + m.group(3),
-                                    script, count=1)
+            if fresh != meta["version"]:
+                script = VERSION_RE.sub(lambda m: m.group(1) + fresh + m.group(3),
+                                        script, count=1)
+                if not check_only:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(script)
+            changed.append(f"{pid} {old_version or '(new)'} -> {fresh}")
             meta["version"] = fresh
-            changed.append(f"{pid} {old_version} -> {fresh}")
+        elif meta["version"] != old_version:
+            # script identical, header disagreeing: the header is the thing
+            # that is wrong, so it is put back rather than published
+            said = meta["version"]
+            script = VERSION_RE.sub(lambda m: m.group(1) + old_version + m.group(3),
+                                    script, count=1)
+            meta["version"] = old_version
             if not check_only:
                 with open(path, "w", encoding="utf-8") as fh:
                     fh.write(script)
-        elif old_script is None or script != old_script or meta["version"] != old_version:
-            changed.append(f"{pid} {old_version or '(new)'} -> {meta['version']}")
+            changed.append(f"{pid} header said {said}, kept {old_version}")
 
         bundle = dict(meta, category=category, script=script)
         # sorted keys and a trailing newline, so an unchanged plugin produces a
