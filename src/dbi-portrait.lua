@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.005",
+    version     = "2026.08.15.006",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -142,6 +142,15 @@ local formUrl = ""           -- the active form's image, "" = base
 local formName = ""
 
 -- char.vitals, owned copy
+-- What you are actually doing, watched off the lines that say so.
+--
+-- 'position' comes from score, and score is a SNAPSHOT: whatever you were
+-- doing when you last typed it, shown for the rest of the session. The panel
+-- read RESTING through an entire fight because that is what score had said an
+-- hour earlier. A stale posture is the same kind of lie as a stale opponent,
+-- and this file already refuses to persist one of those.
+local posture = ""
+
 local vit = nil
 
 -- Enemy lifeforce. GMCP carries nothing about the opponent, so this is read off
@@ -1404,6 +1413,21 @@ local function matchForm(lowLine)
     return bestName, bestUrl
 end
 
+-- The four lines that actually report a posture, all confirmed in the
+-- transcript rather than guessed at.
+local function feedPosture(clean)
+    local was = posture
+    if clean == "You collapse into a deep sleep." then posture = "sleeping"
+    elseif clean == "You wake and climb quickly to your feet." then posture = "standing"
+    elseif clean == "You meditate peacefully, collecting energy from the cosmos." then
+        posture = "meditating"
+    elseif clean == "You are already standing." then posture = "standing"
+    elseif clean == "You dig down into the dirt, ready to do battle!" then
+        posture = "ready"
+    end
+    return posture ~= was
+end
+
 local function feedForm(clean)
     if clean == "" then return false end
 
@@ -2398,8 +2422,15 @@ local function portraitBody()
     if formName ~= "" then
         pills[#pills + 1] = '<span class="pill good">' .. escapeHtml(formName) .. "</span>"
     end
-    if has(sc.position) then
-        pills[#pills + 1] = '<span class="pill">' .. escapeHtml(sc.position) .. "</span>"
+    -- Fighting beats everything: the opponent bar is up, so whatever score
+    -- said about sitting down is an hour out of date.
+    local pose = posture
+    if foe.name ~= nil or safeNum(foe.val) ~= nil or safeNum(foe.hit) ~= nil then
+        pose = "fighting"
+    end
+    if pose == "" then pose = sc.position end
+    if has(pose) then
+        pills[#pills + 1] = '<span class="pill">' .. escapeHtml(pose) .. "</span>"
     end
     if has(base) and has(pl) then
         if pl > base then
@@ -5680,6 +5711,7 @@ function onConnect(sessionId)
     -- field happened to be overwritten -- the same lie this file's own header
     -- warns about for vitals.
     charState = {}
+    posture = ""
     -- a fresh login stands in base form whatever was active before
     formUrl = ""
     formName = ""
@@ -5788,6 +5820,7 @@ function onLine(sessionId, rawLine, cleanLine)
         if parseLook(clean) then changed = true end
         if feedFoe(clean) then changed = true end
         if feedForm(clean) then changed = true end
+        if feedPosture(clean) then changed = true end
 
         -- The first prompt names the label this session uses. If the gag was
         -- turned on before that -- or armed against the other format -- re-arm
