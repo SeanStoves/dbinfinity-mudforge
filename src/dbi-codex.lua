@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.15.002",
+    version     = "2026.08.15.003",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1953,6 +1953,39 @@ local function dexCommand(cmd)
             end
         end
 
+    -- 'dbdex kw soldier' -- the word that scans whatever this plugin last
+    -- offered a link for.
+    --
+    -- The guess is right nine times in ten and the retry learns most of the
+    -- rest, but a retry only fires when the MUD actually answers "They aren't
+    -- here." -- and a mob that answers to two words, one of them somebody
+    -- else's, never produces that line. This is the way to just say so.
+    elseif low == "kw" or low:sub(1, 3) == "kw " then
+        local word = trimBoth(low:sub(4))
+        if word == "" then
+            local n = 0
+            for name, kw in pairs(scanKw) do
+                n = n + 1
+                print(TAG .. "  " .. name .. "  ->  scan " .. kw)
+            end
+            if n == 0 then
+                echo(TAG .. "no keywords learned yet. Stand where one is and "
+                    .. "'dbdex kw <word>' after it offers the wrong one.", GOLD)
+            end
+            return
+        end
+        local who = tried.name
+        if type(who) ~= "string" or who == "" then who = scan.who end
+        if type(who) ~= "string" or who == "" then
+            echo(TAG .. "nothing to attach that to -- walk into a room with a "
+                .. "mob in it first.", "#ff6666")
+            return
+        end
+        scanKw[keyOf(who)] = word
+        -- Offer it again here rather than making them leave and come back.
+        forgetOffers()
+        echo(TAG .. "'" .. who .. "' will be scanned as '" .. word .. "'.", GOLD)
+
     elseif low == "diag" then
         print(TAG .. "instance=" .. INSTANCE)
         local spot = here()
@@ -2131,13 +2164,31 @@ local function queryItems(q)
     return out
 end
 
+-- One table out, never three values.
+--
+-- This used to return 'status, body, err' and onRequest read it back with
+--
+--     local ok, status, body, err = pcall(route, method, path, q)
+--
+-- which is sharp edge 4. The multi-value return came through the transpiler
+-- wrapped into a single value, so 'status' held the whole tuple and 'body'
+-- and 'err' arrived undefined. On the wire that looked like
+--
+--     status=200,[object Object],   mobs=0
+--
+-- a status no safeNum can read and an empty body, so every caller decided
+-- Codex had nothing and said so. dbi-train reported 'Codex has nothing
+-- scanned in The Ginyu Base' against a store holding fifteen mobs.
+--
+-- Real Lua handles the multi-return correctly, which is why luac, the linter
+-- and a green suite all had nothing to say about it.
 local function route(method, path, q)
     if method ~= "GET" then
-        return 400, nil, "only GET is served"
+        return { status = 400, body = nil, err = "only GET is served" }
     end
 
-    if path == "/mobs" then return 200, queryMobs(q), nil end
-    if path == "/items" then return 200, queryItems(q), nil end
+    if path == "/mobs" then return { status = 200, body = queryMobs(q) } end
+    if path == "/items" then return { status = 200, body = queryItems(q) } end
 
     -- /mobs/<name> and /items/<name>. A name is not unique -- the same mob in
     -- two areas at two powers is two records -- so this answers with a list as
@@ -2151,15 +2202,19 @@ local function route(method, path, q)
                 push(found, mobOut(v))
             end
         end
-        if rowCount(found) == 0 then return 404, nil, "no mob by that name" end
-        return 200, found, nil
+        if rowCount(found) == 0 then
+            return { status = 404, body = nil, err = "no mob by that name" }
+        end
+        return { status = 200, body = found }
     end
 
     one = capOf(path, "^/items/(.+)$")
     if one ~= nil then
         local rec = items[keyOf(one)]
-        if type(rec) ~= "table" then return 404, nil, "no item by that name" end
-        return 200, itemOut(rec), nil
+        if type(rec) ~= "table" then
+            return { status = 404, body = nil, err = "no item by that name" }
+        end
+        return { status = 200, body = itemOut(rec) }
     end
 
     if path == "/areas" then
@@ -2171,7 +2226,7 @@ local function route(method, path, q)
         end
         for a, n in pairs(seen) do push(out, { area = a, mobs = n }) end
         table.sort(out, function(x, y) return x.area < y.area end)
-        return 200, out, nil
+        return { status = 200, body = out }
     end
 
     -- What things go for. Only items that have actually sold, so the caller
@@ -2193,7 +2248,7 @@ local function route(method, path, q)
             end
         end
         table.sort(out, function(a, b) return a.name < b.name end)
-        return 200, out, nil
+        return { status = 200, body = out }
     end
 
     one = capOf(path, "^/sales/(.+)$")
@@ -2201,21 +2256,24 @@ local function route(method, path, q)
         local rec = items[keyOf(one)]
         local st = nil
         if type(rec) == "table" then st = saleStats(rec) end
-        if st == nil then return 404, nil, "nothing sold by that name" end
+        if st == nil then
+            return { status = 404, body = nil, err = "nothing sold by that name" }
+        end
         local body = itemOut(rec)
         body.count = st.count
         body.min = st.min
         body.max = st.max
         body.avg = st.avg
-        return 200, body, nil
+        return { status = 200, body = body }
     end
 
     if path == "/stats" then
-        return 200, { mobs = countOf(mobs), items = countOf(items),
-                      sales = sawSales, version = VERSION }, nil
+        return { status = 200, body = { mobs = countOf(mobs),
+            items = countOf(items), sales = sawSales, version = VERSION } }
     end
 
-    return 404, nil, "no such route: " .. tostring(path)
+    return { status = 404, body = nil,
+             err = "no such route: " .. tostring(path) }
 end
 
 local function onRequest(req)
@@ -2233,14 +2291,19 @@ local function onRequest(req)
 
     local method = tostring(req.method or "GET"):upper()
     local path = tostring(req.path or "")
-    local ok, status, body, err = pcall(route, method, path, q)
-    if not ok then
-        status, body, err = 500, nil, tostring(status)
+    -- One value out of pcall, assigned inside the closure. Capturing route's
+    -- returns through pcall is what broke this; capturing pcall's own pair
+    -- would be the same trap one step out, since its arity varies with
+    -- whether the call threw.
+    local res = nil
+    local ok = pcall(function() res = route(method, path, q) end)
+    if not ok or type(res) ~= "table" then
+        res = { status = 500, body = nil, err = "route failed" }
     end
 
     pcall(function()
-        emit(reply, { id = req.id, from = SERVICE, status = status,
-                      body = body, error = err })
+        emit(reply, { id = req.id, from = SERVICE, status = res.status,
+                      body = res.body, error = res.err })
     end)
 end
 
