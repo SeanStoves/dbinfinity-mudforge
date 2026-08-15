@@ -3,7 +3,7 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-15T05:27:10Z",
+  "generated": "2026-08-15T05:30:59Z",
   "pluginCount": 6,
   "plugins": [
     {
@@ -23,14 +23,14 @@
     {
       "id": "dbi-portrait",
       "name": "DB Infinity Portrait",
-      "version": "0.48.0",
+      "version": "0.48.1",
       "author": "Solao",
       "description": "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-portrait.json",
       "format": "json",
-      "sha256": "e88e14564d2e2d0fa1f5a8591c95213178e73e83d4f18147ec8168135e4f9584",
-      "size": 243486,
+      "sha256": "11a3a2af5bc70441dbd7fcbad9dbde535b9639d43522296a207a3f709ab2a7d9",
+      "size": 243929,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/portrait.md"
     },
