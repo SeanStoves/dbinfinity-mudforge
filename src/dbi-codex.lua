@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.006",
+    version     = "2026.08.16.007",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1430,6 +1430,7 @@ local function loadAll()
         end
     end
     if p.view == "items" then view = "items" end
+    if p.view == "trainers" then view = "trainers" end
     if type(p.kw) == "table" then
         for name, word in pairs(p.kw) do
             if type(name) == "string" and type(word) == "string" and word ~= "" then
@@ -1877,6 +1878,129 @@ local function detailBody()
     return table.concat(t)
 end
 
+-- Who teaches this, and where.
+--
+-- A plain function rather than only a route, because the panel and the
+-- command both need it and 'route' is declared a few hundred lines further
+-- down -- a local used above its declaration resolves as a nil global here.
+local function queryTrainers(want)
+    local out, n = {}, 0
+
+    -- The named ones first: they are the answer to "where do I go", and a
+    -- room we have stood in cannot be.
+    for _, t in ipairs(TAUGHT_BY) do
+        local hit = want == ""
+        if not hit then
+            for _, sk in ipairs(t.skills) do
+                if sk:find(want, 1, true) ~= nil then hit = true end
+            end
+        end
+        if hit then
+            n = n + 1
+            out[n] = { kind = "named", who = t.who, race = t.race,
+                       where = t.where, skills = t.skills }
+        end
+    end
+
+    -- Then the rooms we have actually practised in.
+    for key, rec in pairs(trainers) do
+        local teaches, tn = {}, 0
+        for sk in pairs(rec.teaches) do
+            if want == "" or sk:find(want, 1, true) ~= nil then
+                tn = tn + 1
+                teaches[tn] = sk
+            end
+        end
+        local refused, rn = {}, 0
+        for sk in pairs(rec.refused) do
+            rn = rn + 1
+            refused[rn] = sk
+        end
+        table.sort(teaches)
+        table.sort(refused)
+        -- A room that refused the very thing being asked about is an
+        -- answer too -- it is the one place not to walk to.
+        if want == "" or tn > 0 or rec.refused[want] ~= nil then
+            n = n + 1
+            out[n] = { kind = "room", vnum = safeNum(key),
+                       room = roomLabel(key), area = rec.area,
+                       teaches = teaches, refused = refused,
+                       refusedThis = rec.refused[want] ~= nil }
+        end
+    end
+
+    local quest = nil
+    if want ~= "" then
+        for sk, howto in pairs(BY_QUEST) do
+            if sk:find(want, 1, true) ~= nil then quest = howto end
+        end
+    end
+
+    return { trainers = out, quest = quest }
+end
+
+-- Who teaches what, as a panel.
+--
+-- The named ones first: they are the answer to "where do I go", and they are
+-- the same for everyone. Rooms we have practised in come after, because they
+-- are only ever the handful you have stood in.
+--
+-- 'where' is prose for the named ones today. When the rooms are identified it
+-- becomes a vnum and an area like the learned rows already carry, and this is
+-- where that goes -- the row is laid out for it.
+local function trainersBody()
+    local body = queryTrainers(trimBoth(filter):lower())
+    local out = {}
+    local function add(x) out[#out + 1] = x end
+
+    if body.quest ~= nil then
+        add('<div class="hint">not taught by anyone &mdash; '
+            .. escapeHtml(body.quest) .. "</div>")
+    end
+
+    local named, seen = {}, {}
+    for _, t in ipairs(body.trainers) do
+        if t.kind == "named" then named[#named + 1] = t else seen[#seen + 1] = t end
+    end
+
+    if #named > 0 then
+        add('<div class="sec">trainers</div>')
+        for _, t in ipairs(named) do
+            add('<div class="row"><div class="nm">' .. escapeHtml(t.who)
+                .. '</div><div class="sub">' .. escapeHtml(t.race) .. " &middot; "
+                .. escapeHtml(table.concat(t.skills, ", ")) .. "</div>")
+            add('<div class="sub dim">' .. escapeHtml(t.where) .. "</div></div>")
+        end
+    end
+
+    if #seen > 0 then
+        add('<div class="sec">practised in</div>')
+        for _, t in ipairs(seen) do
+            -- The area as the MAP calls it, not as it was typed. A room the
+            -- map has renamed since shows renamed here.
+            local where = escapeHtml(t.room) .. "  [" .. tostring(t.vnum) .. "]"
+            if type(t.area) == "string" and t.area ~= "" then
+                where = where .. "  &middot; " .. escapeHtml(t.area)
+            end
+            add('<div class="row"><div class="nm">' .. where .. "</div>")
+            if #t.teaches > 0 then
+                add('<div class="sub">teaches '
+                    .. escapeHtml(table.concat(t.teaches, ", ")) .. "</div>")
+            end
+            if #t.refused > 0 then
+                add('<div class="sub dim">refused '
+                    .. escapeHtml(table.concat(t.refused, ", ")) .. "</div>")
+            end
+            add("</div>")
+        end
+    end
+
+    if #named == 0 and #seen == 0 then
+        add('<div class="hint">nothing matching that.</div>')
+    end
+    return table.concat(out)
+end
+
 local function render()
     if not widget then return end
 
@@ -1886,12 +2010,15 @@ local function render()
         inner = detailBody()
     elseif view == "items" then
         inner = itemsBody()
+    elseif view == "trainers" then
+        inner = trainersBody()
     else
         inner = mobsBody()
     end
 
-    local mobOn, itemOn = " on", ""
+    local mobOn, itemOn, trainOn = " on", "", ""
     if view == "items" then mobOn, itemOn = "", " on" end
+    if view == "trainers" then mobOn, trainOn = "", " on" end
 
     -- The box carries whatever is pending, so a re-render for any other reason
     -- puts back what was being typed.
@@ -1948,6 +2075,7 @@ local function render()
         .. '<div class="bar"><span>Codex</span><span class="sp"></span>'
         .. '<span class="tb' .. mobOn .. '" data-mud-action="tab" data-mud-data="mobs">mobs</span>'
         .. '<span class="tb' .. itemOn .. '" data-mud-action="tab" data-mud-data="items">items</span>'
+        .. '<span class="tb' .. trainOn .. '" data-mud-action="tab" data-mud-data="trainers">trainers</span>'
         .. '<span class="tb" data-mud-action="close">hide</span></div>'
         .. bar
         .. hint
@@ -1988,67 +2116,6 @@ local function countOf(tbl)
     local n = 0
     for _ in pairs(tbl) do n = n + 1 end
     return n
-end
-
--- Who teaches this, and where.
---
--- A plain function rather than only a route, because the command needs it too
--- and 'route' is declared a few hundred lines further down -- a local used
--- above its declaration resolves as a nil global here.
-local function queryTrainers(want)
-    local out, n = {}, 0
-
-    -- The named ones first: they are the answer to "where do I go", and a
-    -- room we have stood in cannot be.
-    for _, t in ipairs(TAUGHT_BY) do
-        local hit = want == ""
-        if not hit then
-            for _, sk in ipairs(t.skills) do
-                if sk:find(want, 1, true) ~= nil then hit = true end
-            end
-        end
-        if hit then
-            n = n + 1
-            out[n] = { kind = "named", who = t.who, race = t.race,
-                       where = t.where, skills = t.skills }
-        end
-    end
-
-    -- Then the rooms we have actually practised in.
-    for key, rec in pairs(trainers) do
-        local teaches, tn = {}, 0
-        for sk in pairs(rec.teaches) do
-            if want == "" or sk:find(want, 1, true) ~= nil then
-                tn = tn + 1
-                teaches[tn] = sk
-            end
-        end
-        local refused, rn = {}, 0
-        for sk in pairs(rec.refused) do
-            rn = rn + 1
-            refused[rn] = sk
-        end
-        table.sort(teaches)
-        table.sort(refused)
-        -- A room that refused the very thing being asked about is an
-        -- answer too -- it is the one place not to walk to.
-        if want == "" or tn > 0 or rec.refused[want] ~= nil then
-            n = n + 1
-            out[n] = { kind = "room", vnum = safeNum(key),
-                       room = roomLabel(key), area = rec.area,
-                       teaches = teaches, refused = refused,
-                       refusedThis = rec.refused[want] ~= nil }
-        end
-    end
-
-    local quest = nil
-    if want ~= "" then
-        for sk, howto in pairs(BY_QUEST) do
-            if sk:find(want, 1, true) ~= nil then quest = howto end
-        end
-    end
-
-    return { trainers = out, quest = quest }
 end
 
 local function dexCommand(cmd)
@@ -2720,7 +2787,7 @@ function init()
         if type(data.data) == "string" then arg = data.data end
 
         if act == "tab" then
-            if arg == "mobs" or arg == "items" then
+            if arg == "mobs" or arg == "items" or arg == "trainers" then
                 view = arg
                 detail = ""
                 page = 1
