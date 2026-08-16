@@ -3,7 +3,7 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-15T23:06:24Z",
+  "generated": "2026-08-16T02:39:29Z",
   "pluginCount": 6,
   "plugins": [
     {
@@ -51,14 +51,14 @@
     {
       "id": "dbi-codex",
       "name": "DB Infinity Codex",
-      "version": "2026.08.15.003",
+      "version": "2026.08.16.000",
       "author": "Solao",
       "description": "A searchable record of items and mobs: what they are, and where you found them.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-codex.json",
       "format": "json",
-      "sha256": "c6d8153936fdb2152cb5d90920e15258a5ebadaca27ab860d85b5fbb097764a7",
-      "size": 110712,
+      "sha256": "ed873d04adf5d9a6111daf658df469aaa384c8376faee943544b379d510c5992",
+      "size": 111633,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/codex.md"
     },

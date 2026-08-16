@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.15.003",
+    version     = "2026.08.16.000",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1272,7 +1272,11 @@ local function saveAll()
     end
 
     local ok, err = pcall(function()
-        saveTable(STORE, { mobs = outMobs, items = outItems, view = view }, "global")
+        -- scanKw goes with them. A confirmed keyword is learned once, from a
+        -- scan that may not come round again for an hour, which is the same
+        -- reason everything else here saves on every change.
+        saveTable(STORE, { mobs = outMobs, items = outItems, view = view,
+                           kw = scanKw }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
@@ -1318,6 +1322,13 @@ local function loadAll()
         end
     end
     if p.view == "items" then view = "items" end
+    if type(p.kw) == "table" then
+        for name, word in pairs(p.kw) do
+            if type(name) == "string" and type(word) == "string" and word ~= "" then
+                scanKw[name] = word
+            end
+        end
+    end
 
     -- and heal a store that already carries one
     dropEmpty()
@@ -2072,7 +2083,13 @@ end
 -- change it.
 
 local function mobOut(rec)
-    local out = { name = rec.name, area = rec.area, pl = safeNum(rec.pl), rooms = {} }
+    -- kw is the word the MUD itself answered to. It is only ever set from a
+    -- scan that came back with an outline, so it is confirmed rather than
+    -- guessed -- which is what makes it safe for another plugin to send.
+    -- Absent when nothing has confirmed one, and a caller should fall back to
+    -- the full name rather than inventing something.
+    local out = { name = rec.name, area = rec.area, pl = safeNum(rec.pl),
+                  kw = scanKw[keyOf(rec.name)], rooms = {} }
     for _, n in ipairs(roomList(rec)) do push(out.rooms, n) end
     return out
 end
