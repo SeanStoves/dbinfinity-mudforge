@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.005",
+    version     = "2026.08.16.006",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -419,10 +419,9 @@ end
 -- What the named race-skill trainers teach, and where they stand.
 --
 -- Seeded rather than learned, because there is no way to learn it: you would
--- have to already be standing in front of one. Compiled by the DBI community
--- at dbi.quest.fyi/raceskill-trainers -- game facts rather than anyone's
--- code, and the same for every player, which is why they are here and not in
--- the private trainer plugin.
+-- have to already be standing in front of one. Common knowledge on this MUD,
+-- and the same for every player, which is why it is here and not in the
+-- private trainer plugin.
 --
 -- The generic attendant in a training room is a different animal and IS
 -- learned, below. These are the named ones you go looking for.
