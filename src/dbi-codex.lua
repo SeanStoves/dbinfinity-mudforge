@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.007",
+    version     = "2026.08.16.008",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1963,35 +1963,47 @@ local function trainersBody()
         if t.kind == "named" then named[#named + 1] = t else seen[#seen + 1] = t end
     end
 
+    -- Same shape as a mob row, because it is the same panel: a flat .row of
+    -- spans, then .sub lines under it. Nesting divs INSIDE .row does not work
+    -- -- it is a flex container and .nm ellipsizes, so the first attempt laid
+    -- three boxed columns across and truncated every name to "Maste...".
     if #named > 0 then
         add('<div class="sec">trainers</div>')
         for _, t in ipairs(named) do
-            add('<div class="row"><div class="nm">' .. escapeHtml(t.who)
-                .. '</div><div class="sub">' .. escapeHtml(t.race) .. " &middot; "
-                .. escapeHtml(table.concat(t.skills, ", ")) .. "</div>")
-            add('<div class="sub dim">' .. escapeHtml(t.where) .. "</div></div>")
+            add('<div class="row"><span class="nm">' .. escapeHtml(t.who)
+                .. '</span><span class="go2">' .. escapeHtml(t.race)
+                .. "</span></div>")
+            add('<div class="sub">' .. escapeHtml(table.concat(t.skills, ", "))
+                .. "</div>")
+            add('<div class="sub">' .. escapeHtml(t.where) .. "</div>")
         end
     end
 
     if #seen > 0 then
         add('<div class="sec">practised in</div>')
         for _, t in ipairs(seen) do
-            -- The area as the MAP calls it, not as it was typed. A room the
-            -- map has renamed since shows renamed here.
-            local where = escapeHtml(t.room) .. "  [" .. tostring(t.vnum) .. "]"
+            -- The vnum walks you there, the way a mob's rooms do. Same
+            -- action, so it goes through the mapper's own walker.
+            add('<div class="row"><span class="nm">' .. escapeHtml(t.room)
+                .. '</span><span class="go2" data-mud-action="goto"'
+                .. ' data-mud-data="' .. tostring(t.vnum) .. '">'
+                .. tostring(t.vnum) .. "</span></div>")
+            -- The area as the MAP calls it, not as it was typed, so a room
+            -- renamed later reads renamed here.
+            local head = ""
             if type(t.area) == "string" and t.area ~= "" then
-                where = where .. "  &middot; " .. escapeHtml(t.area)
+                head = escapeHtml(t.area) .. " &middot; "
             end
-            add('<div class="row"><div class="nm">' .. where .. "</div>")
             if #t.teaches > 0 then
-                add('<div class="sub">teaches '
+                add('<div class="sub">' .. head .. "teaches "
                     .. escapeHtml(table.concat(t.teaches, ", ")) .. "</div>")
+            elseif head ~= "" then
+                add('<div class="sub">' .. head .. "nothing yet</div>")
             end
             if #t.refused > 0 then
-                add('<div class="sub dim">refused '
+                add('<div class="sub">refused '
                     .. escapeHtml(table.concat(t.refused, ", ")) .. "</div>")
             end
-            add("</div>")
         end
     end
 
