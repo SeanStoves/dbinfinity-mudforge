@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.009",
+    version     = "2026.08.16.010",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -34,29 +34,50 @@ local TAG = "[DBI Codex " .. VERSION .. "] "
 -- so each load stamps a token and an older tick retires itself.
 local INSTANCE = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
 
-local GOLD    = "#e8b45c"
-local INK     = "#edf2f8"
-local INK_DIM = "#969fab"
-local RULE    = "rgba(255,255,255,0.12)"
-local PANEL_BG = "rgba(15,22,33,0.92)"
-local GOOD    = "#5ec966"
-local UNKNOWN = "#ff9a3c"
+-- The palette. Seven file-scope locals for one set of colours -- and these
+-- same names are redefined per file across the plugins here, drifting as they
+-- go, which is what a registered app-wide theme would fix properly.
+local hue = {}
+
+hue.GOLD    = "#e8b45c"
+hue.INK     = "#edf2f8"
+hue.INK_DIM = "#969fab"
+hue.RULE    = "rgba(255,255,255,0.12)"
+hue.PANEL_BG = "rgba(15,22,33,0.92)"
+hue.GOOD    = "#5ec966"
+hue.UNKNOWN = "#ff9a3c"
 
 -- Storage is shared with five other plugins and this is the only one that grows
 -- on its own, so it is bounded from the start rather than when it becomes a
 -- problem. Oldest-seen goes first.
-local MAX_MOBS  = 400
-local MAX_ITEMS = 400
-local MAX_ROOMS = 40        -- sightings kept per mob
-local MAX_SRC   = 12        -- sources kept per item
+-- How much of each thing is kept.
+local cap = {}
 
-local widget = nil
+cap.mobs  = 400
+cap.items = 400
+cap.rooms = 40        -- sightings kept per mob
+cap.src   = 12        -- sources kept per item
+
+-- The panel: the widget, the alpha and terminal size, the measured height
+-- and the row arithmetic that pages off it, which view is showing and what is
+-- expanded. Eleven file-scope locals for one panel.
+--
+-- 'shown' stays out of it. There is a 'local shown = recolour(raw)' inside a
+-- function further down, and folding the file-scope one into this table
+-- rewrites that line into 'local ui.shown = ...', which is not Lua.
+local ui = {}
+
+ui.id = nil
 local shown = true
-local panelAlpha = 0.92
-local termSize = 13
+ui.alpha = 0.92
+ui.size = 13
 
-local mobs = {}
-local items = {}
+-- What the codex knows, and how it was loaded: the three record tables, the
+-- storage key, the write count and where the load came from.
+local store = {}
+
+store.mobs = {}
+store.items = {}
 
 -- Who teaches what, keyed by room.
 --
@@ -71,7 +92,7 @@ local items = {}
 -- place, which is what this plugin is for, and it is the same for everyone.
 -- What a skill costs YOU, and which ones you have chosen to use, stay over
 -- there.
-local trainers = {}
+store.trainers = {}
 -- The skill the last 'prac <skill>' asked for. The refusal does not name it:
 --
 --   An Attendant tells you, 'I do not know how to teach that.'
@@ -97,25 +118,25 @@ local hereOnly = true
 -- the panel size once already and cost a release. The event carries what the
 -- widget actually became, and the starting value is what createWidget asked
 -- for, which is right until the first drag.
-local panelH = 420
-local page = 1
+ui.h = 420
+ui.page = 1
 
 -- Roughly what a row costs. A mob is its name and a line of rooms under it; an
 -- item is its name and a line of detail. Both are about two lines of text plus
 -- the padding, and the chrome above is the bar, the search box, the header line
 -- and the pager itself.
-local ROW_PX = 34
-local CHROME_PX = 116
+ui.ROW_PX = 34
+ui.CHROME_PX = 116
 
 local function perPage()
-    local n = math.floor((panelH - CHROME_PX) / ROW_PX)
+    local n = math.floor((ui.h - ui.CHROME_PX) / ui.ROW_PX)
     if n < 3 then return 3 end
     if n > 40 then return 40 end
     return n
 end
-local view = "mobs"
+ui.view = "mobs"
 -- Which item the detail view is showing, if it is. Empty means the list.
-local detail = ""
+ui.detail = ""
 -- Which mob's keyword is being edited, and what has been typed into it so
 -- far. Empty means nobody is typing.
 local kwEdit = ""
@@ -190,7 +211,7 @@ local dropLine = false
 local sweptOff = 0
 
 -- Which store the records came back out of, for the banner and for diag.
-local loadedFrom = "nothing"
+store.loadedFrom = "nothing"
 -- Whether the store answered at all when init() asked it.
 --
 -- It does not always. Default-scope tables live in the world file and init()
@@ -198,7 +219,7 @@ local loadedFrom = "nothing"
 -- documented as independent of that, but "the read returned nothing" is a
 -- state worth knowing either way -- because a save made in it must not be
 -- allowed to stand in for everything that was there.
-local loadedOk = false
+store.loadedOk = false
 
 -- Every widget event, printed as it arrives, when asked for. Which of them the
 -- client actually delivers for an <input> -- and what fields ride along -- is
@@ -208,10 +229,13 @@ local uiTrace = false
 local lastUi = "nothing yet"
 
 local lastError = "none"
-local sawRooms = 0
-local sawMobs = 0
-local sawItems = 0
-local sawSales = 0
+-- What this session has actually seen, which is what the counters report on.
+local saw = {}
+
+saw.rooms = 0
+saw.mobs = 0
+saw.items = 0
+saw.sales = 0
 
 ----------------------------------------------------------------------
 -- helpers
@@ -467,12 +491,12 @@ local function trainerHere()
     local at = here()
     if type(at) ~= "table" then return nil end
     local key = tostring(at.num)
-    if type(trainers[key]) ~= "table" then
-        trainers[key] = { area = at.area, teaches = {}, refused = {}, at = os.time() }
+    if type(store.trainers[key]) ~= "table" then
+        store.trainers[key] = { area = at.area, teaches = {}, refused = {}, at = os.time() }
     end
     -- The area can be filled in later than the first sighting was.
-    if trainers[key].area == "" then trainers[key].area = at.area end
-    return trainers[key]
+    if store.trainers[key].area == "" then store.trainers[key].area = at.area end
+    return store.trainers[key]
 end
 
 ----------------------------------------------------------------------
@@ -535,7 +559,7 @@ end
 -- walking it as well.
 local function dropEmpty()
     local kept, dropped = {}, 0
-    for k, v in pairs(mobs) do
+    for k, v in pairs(store.mobs) do
         if type(v) == "table" and rowCount(roomList(v)) > 0 then
             -- and the rooms table is rebuilt too, so a removed room stops being
             -- yielded by pairs() with a value that is no longer a number
@@ -548,7 +572,7 @@ local function dropEmpty()
         end
     end
     if dropped > 0 then
-        mobs = kept
+        store.mobs = kept
         sweptOff = sweptOff + dropped
     end
 end
@@ -571,7 +595,7 @@ end
 -- Anything scanned is untouched: a power level is the whole point of the store.
 local function keepBlindOnly(vnum)
     local now = safeNum(vnum)
-    for _, v in pairs(mobs) do
+    for _, v in pairs(store.mobs) do
         if type(v) == "table" and safeNum(v.pl) == nil then
             local rooms = {}
             for _, r in ipairs(roomList(v)) do
@@ -650,7 +674,7 @@ local function noteMob(name, spot, pl)
     -- was supposed to empty it.
     if not safeNum(pl) then
         local want = trimBoth(spot.area):lower()
-        for _, v in pairs(mobs) do
+        for _, v in pairs(store.mobs) do
             if type(v) == "table" and safeNum(v.pl)
                 and trimBoth(tostring(v.area or "")):lower() == want
                 and keyOf(v.name) == keyOf(clean)
@@ -662,7 +686,7 @@ local function noteMob(name, spot, pl)
         end
     end
 
-    if type(rec) ~= "table" then rec = mobs[key] end
+    if type(rec) ~= "table" then rec = store.mobs[key] end
     if type(rec) ~= "table" then
         rec = { name = clean, area = spot.area, pl = safeNum(pl), rooms = {}, at = 0 }
     end
@@ -672,14 +696,14 @@ local function noteMob(name, spot, pl)
     -- rooms are one-to-many, keyed by vnum so a second visit is not a second row
     if type(rec.rooms) ~= "table" then rec.rooms = {} end
     if safeNum(rec.rooms[tostring(spot.num)]) == nil then
-        if rowCount(roomList(rec)) < MAX_ROOMS then
+        if rowCount(roomList(rec)) < cap.rooms then
             rec.rooms[tostring(spot.num)] = spot.num
         end
     end
 
     -- Filed under the key its own power level gives it, which is not the key
     -- that was looked up when a sighting landed in a room already read.
-    mobs[mobKey(spot.area, clean, rec.pl)] = rec
+    store.mobs[mobKey(spot.area, clean, rec.pl)] = rec
 
     -- A reading identifies the thing in THIS room and nothing else.
     --
@@ -689,7 +713,7 @@ local function noteMob(name, spot, pl)
     -- there waiting to be read. The bucket goes when its last room does.
     if safeNum(pl) then
         local blindKey = mobKey(spot.area, clean, nil)
-        local blind = mobs[blindKey]
+        local blind = store.mobs[blindKey]
         if type(blind) == "table" and type(blind.rooms) == "table" then
             -- The room goes; the entry itself is left to dropEmpty below, which
             -- rebuilds rather than deleting. 'mobs[blindKey] = nil' was here
@@ -699,7 +723,7 @@ local function noteMob(name, spot, pl)
     end
 
     dropEmpty()
-    mobs = pruneTo(mobs, MAX_MOBS)
+    store.mobs = pruneTo(store.mobs, cap.mobs)
     return rec
 end
 
@@ -707,14 +731,14 @@ local function itemRec(name)
     local clean = cleanName(name)
     if clean == "" then return nil end
     local key = keyOf(clean)
-    local rec = items[key]
+    local rec = store.items[key]
     if type(rec) ~= "table" then
         rec = { name = clean, src = {}, at = 0 }
     end
     rec.name = clean
     rec.at = os.time()
-    items[key] = rec
-    items = pruneTo(items, MAX_ITEMS)
+    store.items[key] = rec
+    store.items = pruneTo(store.items, cap.items)
     return rec
 end
 
@@ -736,7 +760,7 @@ local function noteSource(name, mobName, spot)
     for _, s in ipairs(rec.src) do
         if type(s) == "table" and s.mob == who and s.room == roomNum then return end
     end
-    if rowCount(rec.src) >= MAX_SRC then return end
+    if rowCount(rec.src) >= cap.src then return end
     push(rec.src, { mob = who, area = area, room = roomNum })
 end
 
@@ -783,7 +807,7 @@ local function feedAna(clean)
             ana.rec.raw = {}
             ana.rec.fields = {}
         end
-        sawItems = sawItems + 1
+        saw.items = saw.items + 1
         if type(ana.rec) == "table" then
             local kind = capOf(clean, "^Object%s+'[^']+'%s+is%s+an?%s+(%S+)")
             if kind ~= nil then ana.rec.kind = kind end
@@ -1069,7 +1093,7 @@ local function feedRoom(clean, raw)
     local spot = here()
     local rec = nil
     if spot then
-        sawMobs = sawMobs + 1
+        saw.mobs = saw.mobs + 1
         rec = noteMob(who, spot, nil)
     end
 
@@ -1160,7 +1184,7 @@ local function keeperHere(spot)
     if type(spot) ~= "table" then return "a shop" end
     local found, seen = nil, 0
     local want = trimBoth(spot.area):lower()
-    for _, v in pairs(mobs) do
+    for _, v in pairs(store.mobs) do
         if type(v) == "table"
             and trimBoth(tostring(v.area or "")):lower() == want
             and type(v.rooms) == "table"
@@ -1204,7 +1228,7 @@ local function feedShop(clean, spot)
     if cost ~= nil then rec.price = safeNum(cost) end
 
     noteSource(nm, keeperHere(spot), spot)
-    sawItems = sawItems + 1
+    saw.items = saw.items + 1
     return true
 end
 
@@ -1217,7 +1241,7 @@ end
 --
 -- Three separate matches, one per value, per the house rule. A nested
 -- multi-capture hands back undefined on a miss and undefined is truthy.
-local MAX_SALES = 40
+cap.sales = 40
 
 local function feedAuction(clean)
     if not clean:find(" sold to ", 1, true) then return false end
@@ -1253,9 +1277,9 @@ local function feedAuction(clean)
 
     -- Oldest off the front once it is full. Rebuilt rather than
     -- table.remove'd: # does not follow a remove in this runtime.
-    if rowCount(rec.sales) > MAX_SALES then
+    if rowCount(rec.sales) > cap.sales then
         local keep = {}
-        local drop = rowCount(rec.sales) - MAX_SALES
+        local drop = rowCount(rec.sales) - cap.sales
         local seen = 0
         for _, sale in ipairs(rec.sales) do
             seen = seen + 1
@@ -1264,7 +1288,7 @@ local function feedAuction(clean)
         rec.sales = keep
     end
 
-    sawSales = sawSales + 1
+    saw.sales = saw.sales + 1
     announce("item", rec)
     return true
 end
@@ -1317,7 +1341,7 @@ end
 -- window that loses data. saveAll is only called when something was actually
 -- recorded, so a flush per call is a flush per real change, which is the rate
 -- it should be.
-local writes = 0
+store.writes = 0
 
 -- The GLOBAL store, not the per-character one.
 --
@@ -1333,10 +1357,10 @@ local writes = 0
 -- The name is prefixed because the global namespace is shared by every plugin
 -- and an unprefixed 'codexdata' is exactly the sort of thing another one would
 -- also pick.
-local STORE = "dbi-codex-data"
+store.KEY = "dbi-codex-data"
 
 local function saveAll()
-    local outMobs, outItems = mobs, items
+    local outMobs, outItems = store.mobs, store.items
 
     -- If the load came up empty, this session does not know what is in the
     -- store -- so it writes ALONGSIDE it rather than over it. Portrait lost a
@@ -1347,9 +1371,9 @@ local function saveAll()
     -- deletions have to stick: this plugin sweeps unread sightings and prunes
     -- to a cap, and a merge that kept every record on disk would quietly undo
     -- both on the next write.
-    if not loadedOk then
+    if not store.loadedOk then
         local disk = nil
-        pcall(function() disk = loadTable(STORE, "global") end)
+        pcall(function() disk = loadTable(store.KEY, "global") end)
         if type(disk) == "table" then
             outMobs, outItems = {}, {}
             for _, pair in ipairs({ { disk.mobs, outMobs }, { disk.items, outItems } }) do
@@ -1359,10 +1383,10 @@ local function saveAll()
                     end
                 end
             end
-            for k, v in pairs(mobs) do
+            for k, v in pairs(store.mobs) do
                 if type(k) == "string" and type(v) == "table" then outMobs[k] = v end
             end
-            for k, v in pairs(items) do
+            for k, v in pairs(store.items) do
                 if type(k) == "string" and type(v) == "table" then outItems[k] = v end
             end
         end
@@ -1372,15 +1396,15 @@ local function saveAll()
         -- scanKw goes with them. A confirmed keyword is learned once, from a
         -- scan that may not come round again for an hour, which is the same
         -- reason everything else here saves on every change.
-        saveTable(STORE, { mobs = outMobs, items = outItems, view = view,
-                           kw = scanKw, trainers = trainers }, "global")
+        saveTable(store.KEY, { mobs = outMobs, items = outItems, view = ui.view,
+                           kw = scanKw, trainers = store.trainers }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
         print(TAG .. "not saved: " .. tostring(err))
         return
     end
-    writes = writes + 1
+    store.writes = store.writes + 1
     pcall(function() saveState() end)
 end
 
@@ -1388,19 +1412,19 @@ end
 -- hand, has never been through any of the readers above.
 local function loadAll()
     local p = nil
-    pcall(function() p = loadTable(STORE, "global") end)
+    pcall(function() p = loadTable(store.KEY, "global") end)
 
     -- Anything written by a build that used the per-character store, brought
     -- over rather than abandoned. Reads and writes must use the same scope they
     -- were made with, so the old name is read with no scope at all.
     if type(p) ~= "table" then
         pcall(function() p = loadTable("codexdata") end)
-        if type(p) == "table" then loadedFrom = "the old per-character store" end
+        if type(p) == "table" then store.loadedFrom = "the old per-character store" end
     else
-        loadedFrom = "the global store"
+        store.loadedFrom = "the global store"
     end
     if type(p) ~= "table" then return end
-    loadedOk = true
+    store.loadedOk = true
 
     if type(p.trainers) == "table" then
         for k, v in pairs(p.trainers) do
@@ -1408,7 +1432,7 @@ local function loadAll()
                 if type(v.teaches) ~= "table" then v.teaches = {} end
                 if type(v.refused) ~= "table" then v.refused = {} end
                 if type(v.area) ~= "string" then v.area = "" end
-                trainers[k] = v
+                store.trainers[k] = v
             end
         end
     end
@@ -1417,7 +1441,7 @@ local function loadAll()
         for k, v in pairs(p.mobs) do
             if type(k) == "string" and type(v) == "table" and type(v.name) == "string" then
                 if type(v.rooms) ~= "table" then v.rooms = {} end
-                mobs[k] = v
+                store.mobs[k] = v
             end
         end
     end
@@ -1425,12 +1449,12 @@ local function loadAll()
         for k, v in pairs(p.items) do
             if type(k) == "string" and type(v) == "table" and type(v.name) == "string" then
                 if type(v.src) ~= "table" then v.src = {} end
-                items[k] = v
+                store.items[k] = v
             end
         end
     end
-    if p.view == "items" then view = "items" end
-    if p.view == "trainers" then view = "trainers" end
+    if p.view == "items" then ui.view = "items" end
+    if p.view == "trainers" then ui.view = "trainers" end
     if type(p.kw) == "table" then
         for name, word in pairs(p.kw) do
             if type(name) == "string" and type(word) == "string" and word ~= "" then
@@ -1448,82 +1472,82 @@ end
 ----------------------------------------------------------------------
 
 local function css()
-    local base = math.max(9, math.floor(termSize * 0.9))
+    local base = math.max(9, math.floor(ui.size * 0.9))
     local t = {}
     local function add(x) t[#t + 1] = x end
     add("<style>")
     add(".dbi-dex{position:relative;height:100%;box-sizing:border-box;display:flex;")
     add("flex-direction:column;container-type:inline-size;overflow:hidden;")
-    add("background:" .. PANEL_BG .. ";color:" .. INK .. ";")
+    add("background:" .. hue.PANEL_BG .. ";color:" .. hue.INK .. ";")
     add("font-family:Fira Code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;")
     add("font-size:" .. base .. "px;}")
     add(".dbi-dex .bar{flex:0 0 auto;display:flex;align-items:center;gap:6px;")
-    add("padding:6px 10px;border-bottom:1px solid " .. RULE .. ";font-weight:600;")
-    add("letter-spacing:0.18em;text-transform:uppercase;color:" .. GOLD .. ";}")
+    add("padding:6px 10px;border-bottom:1px solid " .. hue.RULE .. ";font-weight:600;")
+    add("letter-spacing:0.18em;text-transform:uppercase;color:" .. hue.GOLD .. ";}")
     add(".dbi-dex .sp{flex:1 1 auto;}")
     add(".dbi-dex .tb{flex:0 0 auto;padding:2px 6px;border-radius:2px;cursor:pointer;")
-    add("user-select:none;border:1px solid " .. RULE .. ";color:" .. INK_DIM .. ";")
+    add("user-select:none;border:1px solid " .. hue.RULE .. ";color:" .. hue.INK_DIM .. ";")
     add("text-transform:uppercase;letter-spacing:0.1em;}")
     -- Hover and selected must not look the same. They shared one rule, so a tab
     -- under the cursor was indistinguishable from the tab you were on and the
     -- panel appeared to have two selected at once. Hover brightens the text;
     -- selected also fills.
-    add(".dbi-dex .tb:hover{color:" .. GOLD .. ";}")
-    add(".dbi-dex .tb.on{color:" .. GOLD .. ";border-color:" .. GOLD .. ";")
+    add(".dbi-dex .tb:hover{color:" .. hue.GOLD .. ";}")
+    add(".dbi-dex .tb.on{color:" .. hue.GOLD .. ";border-color:" .. hue.GOLD .. ";")
     add("background:rgba(232,180,92,0.14);}")
     add(".dbi-dex .body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:6px 8px;}")
     add(".dbi-dex .row{display:flex;align-items:baseline;gap:8px;padding:2px 0;")
     add("border-bottom:1px solid rgba(255,255,255,0.05);}")
     add(".dbi-dex .nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
-    add(".dbi-dex .pl{flex:0 0 auto;color:" .. GOOD .. ";}")
-    add(".dbi-dex .pl.none{color:" .. UNKNOWN .. ";}")
-    add(".dbi-dex .sub{padding:0 0 4px 14px;color:" .. INK_DIM .. ";")
-    add("border-left:1px solid " .. RULE .. ";margin-left:4px;}")
+    add(".dbi-dex .pl{flex:0 0 auto;color:" .. hue.GOOD .. ";}")
+    add(".dbi-dex .pl.none{color:" .. hue.UNKNOWN .. ";}")
+    add(".dbi-dex .sub{padding:0 0 4px 14px;color:" .. hue.INK_DIM .. ";")
+    add("border-left:1px solid " .. hue.RULE .. ";margin-left:4px;}")
     add(".dbi-dex .go{flex:0 0 auto;padding:1px 5px;border-radius:2px;cursor:pointer;")
-    add("user-select:none;border:1px solid " .. UNKNOWN .. ";color:" .. UNKNOWN .. ";}")
+    add("user-select:none;border:1px solid " .. hue.UNKNOWN .. ";color:" .. hue.UNKNOWN .. ";}")
     add(".dbi-dex .go:hover{background:rgba(255,154,60,0.15);}")
-    add(".dbi-dex .idle{padding:14px 10px;color:" .. INK_DIM .. ";line-height:1.7;}")
-    add(".dbi-dex .idle b{color:" .. GOLD .. ";}")
-    add(".dbi-dex .hint{padding:2px 8px;color:" .. INK_DIM .. ";border-bottom:1px solid " .. RULE .. ";}")
-    add(".dbi-dex .hint b{color:" .. GOLD .. ";font-weight:600;}")
+    add(".dbi-dex .idle{padding:14px 10px;color:" .. hue.INK_DIM .. ";line-height:1.7;}")
+    add(".dbi-dex .idle b{color:" .. hue.GOLD .. ";}")
+    add(".dbi-dex .hint{padding:2px 8px;color:" .. hue.INK_DIM .. ";border-bottom:1px solid " .. hue.RULE .. ";}")
+    add(".dbi-dex .hint b{color:" .. hue.GOLD .. ";font-weight:600;}")
     -- the detail screen
     add(".dbi-dex .pick{cursor:pointer;}")
     add(".dbi-dex .pick:hover{background:rgba(255,255,255,0.05);}")
     add(".dbi-dex .head{display:flex;align-items:center;gap:8px;")
-    add("padding:0 0 6px 0;border-bottom:1px solid " .. RULE .. ";margin-bottom:6px;}")
-    add(".dbi-dex .dn{flex:1 1 auto;color:" .. GOLD .. ";font-weight:600;")
+    add("padding:0 0 6px 0;border-bottom:1px solid " .. hue.RULE .. ";margin-bottom:6px;}")
+    add(".dbi-dex .dn{flex:1 1 auto;color:" .. hue.GOLD .. ";font-weight:600;")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
-    add(".dbi-dex .dk{flex:0 0 45%;color:" .. INK_DIM .. ";}")
+    add(".dbi-dex .dk{flex:0 0 45%;color:" .. hue.INK_DIM .. ";}")
     add(".dbi-dex .dv{flex:1 1 auto;text-align:right;overflow-wrap:anywhere;}")
     add(".dbi-dex .sec{margin:8px 0 3px;font-size:90%;letter-spacing:0.14em;")
-    add("text-transform:uppercase;color:" .. GOLD .. ";")
-    add("border-bottom:1px solid " .. RULE .. ";padding-bottom:2px;}")
-    add(".dbi-dex .rawln{color:" .. INK_DIM .. ";font-size:92%;")
+    add("text-transform:uppercase;color:" .. hue.GOLD .. ";")
+    add("border-bottom:1px solid " .. hue.RULE .. ";padding-bottom:2px;}")
+    add(".dbi-dex .rawln{color:" .. hue.INK_DIM .. ";font-size:92%;")
     add("overflow-wrap:anywhere;padding:1px 0;}")
     -- the found-on tree: area, then what dropped it
-    add(".dbi-dex .t1{padding:3px 0 1px 6px;color:" .. INK .. ";}")
-    add(".dbi-dex .t2{padding:0 0 1px 22px;color:" .. INK_DIM .. ";")
-    add("border-left:1px solid " .. RULE .. ";margin-left:10px;")
+    add(".dbi-dex .t1{padding:3px 0 1px 6px;color:" .. hue.INK .. ";}")
+    add(".dbi-dex .t2{padding:0 0 1px 22px;color:" .. hue.INK_DIM .. ";")
+    add("border-left:1px solid " .. hue.RULE .. ";margin-left:10px;")
     add("overflow-wrap:anywhere;}")
     add(".dbi-dex .sec .tb{float:right;text-transform:none;letter-spacing:0;}")
     -- the search bar
     add(".dbi-dex .find{flex:0 0 auto;display:flex;align-items:center;gap:5px;")
-    add("padding:5px 8px;border-bottom:1px solid " .. RULE .. ";}")
+    add("padding:5px 8px;border-bottom:1px solid " .. hue.RULE .. ";}")
     add(".dbi-dex .find input{flex:1 1 auto;min-width:0;background:rgba(0,0,0,0.35);")
-    add("border:1px solid " .. RULE .. ";border-radius:3px;color:" .. INK .. ";")
+    add("border:1px solid " .. hue.RULE .. ";border-radius:3px;color:" .. hue.INK .. ";")
     add("padding:3px 6px;font:inherit;outline:none;}")
-    add(".dbi-dex .find input:focus{border-color:" .. GOLD .. ";}")
+    add(".dbi-dex .find input:focus{border-color:" .. hue.GOLD .. ";}")
     -- the scope switch reads as set without being a tab
-    add(".dbi-dex .tb.sw{color:" .. GOLD .. ";border-color:" .. GOLD .. ";}")
+    add(".dbi-dex .tb.sw{color:" .. hue.GOLD .. ";border-color:" .. hue.GOLD .. ";}")
     -- the pager, pinned under the list rather than scrolling with it
     add(".dbi-dex .pager{flex:0 0 auto;display:flex;align-items:center;gap:6px;")
-    add("justify-content:center;padding:4px 8px;border-top:1px solid " .. RULE .. ";}")
-    add(".dbi-dex .pn{color:" .. INK_DIM .. ";}")
+    add("justify-content:center;padding:4px 8px;border-top:1px solid " .. hue.RULE .. ";}")
+    add(".dbi-dex .pn{color:" .. hue.INK_DIM .. ";}")
     -- a room you can walk to
     add(".dbi-dex .go2{display:inline-block;margin:0 3px 2px 0;padding:0 5px;")
     add("border-radius:2px;cursor:pointer;user-select:none;")
-    add("border:1px solid " .. RULE .. ";color:" .. INK_DIM .. ";}")
-    add(".dbi-dex .go2:hover{color:" .. GOOD .. ";border-color:" .. GOOD .. ";}")
+    add("border:1px solid " .. hue.RULE .. ";color:" .. hue.INK_DIM .. ";}")
+    add(".dbi-dex .go2:hover{color:" .. hue.GOOD .. ";border-color:" .. hue.GOOD .. ";}")
     add("</style>")
     return table.concat(t)
 end
@@ -1574,37 +1598,37 @@ end
 
 -- The slice of a sorted list that fits, and the strip that says so. Returns the
 -- keys to draw; the pager is added by the caller after the rows.
-local pageKeys = nil
-local pageBar = ""
+ui.pageKeys = nil
+ui.pageBar = ""
 
-pageKeys = function(keys)
+ui.pageKeys = function(keys)
     local total = rowCount(keys)
     local per = perPage()
     local pages = math.floor((total + per - 1) / per)
     if pages < 1 then pages = 1 end
-    if page > pages then page = pages end
-    if page < 1 then page = 1 end
+    if ui.page > pages then ui.page = pages end
+    if ui.page < 1 then ui.page = 1 end
 
     if pages == 1 then
-        pageBar = ""
+        ui.pageBar = ""
         return keys
     end
 
     local out = {}
-    local from = (page - 1) * per + 1
+    local from = (ui.page - 1) * per + 1
     for i = from, from + per - 1 do
         if keys[i] ~= nil then push(out, keys[i]) end
     end
 
     local back, fwd = "", ""
-    if page > 1 then
+    if ui.page > 1 then
         back = '<span class="tb" data-mud-action="page" data-mud-data="prev">prev</span>'
     end
-    if page < pages then
+    if ui.page < pages then
         fwd = '<span class="tb" data-mud-action="page" data-mud-data="next">next</span>'
     end
-    pageBar = '<div class="pager">' .. back
-        .. '<span class="pn">' .. page .. " / " .. pages
+    ui.pageBar = '<div class="pager">' .. back
+        .. '<span class="pn">' .. ui.page .. " / " .. pages
         .. " &middot; " .. total .. "</span>" .. fwd .. "</div>"
     return out
 end
@@ -1612,7 +1636,7 @@ end
 local function mobsBody()
     local t = {}
     local function add(x) t[#t + 1] = x end
-    local keys = sortedKeys(mobs)
+    local keys = sortedKeys(store.mobs)
     if rowCount(keys) == 0 then
         if filter ~= "" then
             return '<div class="idle">nothing matches <b>' .. escapeHtml(filter)
@@ -1622,8 +1646,8 @@ local function mobsBody()
             .. "and anything standing there is noted</div>"
     end
 
-    for _, k in ipairs(pageKeys(keys)) do
-        local m = mobs[k]
+    for _, k in ipairs(ui.pageKeys(keys)) do
+        local m = store.mobs[k]
         -- Belt and braces over dropEmpty: an entry with no sightings is not a
         -- mob and must not be drawn even if one somehow survives in the data.
         -- The client kept one after its last room was read, and the panel
@@ -1695,7 +1719,7 @@ end
 local function itemsBody()
     local t = {}
     local function add(x) t[#t + 1] = x end
-    local keys = sortedKeys(items)
+    local keys = sortedKeys(store.items)
     if rowCount(keys) == 0 then
         if filter ~= "" then
             return '<div class="idle">nothing matches <b>' .. escapeHtml(filter)
@@ -1705,8 +1729,8 @@ local function itemsBody()
             .. "&lt;item&gt;</b> and it fills in</div>"
     end
 
-    for _, k in ipairs(pageKeys(keys)) do
-        local it = items[k]
+    for _, k in ipairs(ui.pageKeys(keys)) do
+        local it = store.items[k]
         add('<div class="row pick" data-mud-action="item" data-mud-data="'
             .. escapeHtml(k) .. '"><span class="nm">'
             .. escapeHtml(it.name) .. "</span>")
@@ -1740,9 +1764,9 @@ end
 -- be read back in full is a record that quietly loses whatever nobody thought
 -- to parse -- so the raw block is kept and shown, not just the parsed parts.
 local function detailBody()
-    local it = items[detail]
+    local it = store.items[ui.detail]
     if type(it) ~= "table" then
-        detail = ""
+        ui.detail = ""
         return itemsBody()
     end
 
@@ -1903,7 +1927,7 @@ local function queryTrainers(want)
     end
 
     -- Then the rooms we have actually practised in.
-    for key, rec in pairs(trainers) do
+    for key, rec in pairs(store.trainers) do
         local teaches, tn = {}, 0
         for sk in pairs(rec.teaches) do
             if want == "" or sk:find(want, 1, true) ~= nil then
@@ -2022,23 +2046,23 @@ local function trainersBody()
 end
 
 local function render()
-    if not widget then return end
+    if not ui.id then return end
 
     local inner = ""
-    pageBar = ""
-    if detail ~= "" and view == "items" then
+    ui.pageBar = ""
+    if ui.detail ~= "" and ui.view == "items" then
         inner = detailBody()
-    elseif view == "items" then
+    elseif ui.view == "items" then
         inner = itemsBody()
-    elseif view == "trainers" then
+    elseif ui.view == "trainers" then
         inner = trainersBody()
     else
         inner = mobsBody()
     end
 
     local mobOn, itemOn, trainOn = " on", "", ""
-    if view == "items" then mobOn, itemOn = "", " on" end
-    if view == "trainers" then mobOn, trainOn = "", " on" end
+    if ui.view == "items" then mobOn, itemOn = "", " on" end
+    if ui.view == "trainers" then mobOn, trainOn = "", " on" end
 
     -- The box carries whatever is pending, so a re-render for any other reason
     -- puts back what was being typed.
@@ -2051,7 +2075,7 @@ local function render()
         .. '<span class="tb" data-mud-action="find">find</span>'
     if filter ~= "" then
         bar = bar .. '<span class="tb" data-mud-action="clear">clear</span>'
-    elseif view == "mobs" then
+    elseif ui.view == "mobs" then
         -- The label is what clicking DOES, not what is showing. Showing the
         -- state made it read 'here' while it was already showing here, so the
         -- only way to know what the button would do was to press it. The line
@@ -2081,7 +2105,7 @@ local function render()
     local said = ""
     if filter ~= "" then
         said = 'Viewing: Search Results for <b>"' .. escapeHtml(filter) .. '"</b>'
-    elseif view == "mobs" and not hereOnly then
+    elseif ui.view == "mobs" and not hereOnly then
         said = "Viewing: <b>All</b>"
     elseif area ~= "" then
         said = "Viewing: <b>" .. escapeHtml(area) .. "</b>"
@@ -2090,7 +2114,7 @@ local function render()
     local hint = ""
     if said ~= "" then hint = '<div class="hint">' .. said .. "</div>" end
 
-    setWidgetProperty(widget, "content", css()
+    setWidgetProperty(ui.id, "content", css()
         .. '<div class="dbi-dex">'
         .. '<div class="bar"><span>Codex</span><span class="sp"></span>'
         .. '<span class="tb' .. mobOn .. '" data-mud-action="tab" data-mud-data="mobs">mobs</span>'
@@ -2100,7 +2124,7 @@ local function render()
         .. bar
         .. hint
         .. '<div class="body">' .. inner .. "</div>"
-        .. pageBar
+        .. ui.pageBar
         .. "</div>")
 end
 
@@ -2143,12 +2167,12 @@ local function dexCommand(cmd)
 
     if low == "" or low == "show" then
         shown = true
-        if widget then showWidget(widget) end
+        if ui.id then showWidget(ui.id) end
         safeRender()
 
     elseif low == "hide" then
         shown = false
-        if widget then hideWidget(widget) end
+        if ui.id then hideWidget(ui.id) end
 
     elseif low == "trainers" or low:sub(1, 9) == "trainers " then
         local want = ""
@@ -2186,8 +2210,8 @@ local function dexCommand(cmd)
         if not shownAny then print("   nothing known.") end
 
     elseif low == "mobs" or low == "items" then
-        view = low
-        detail = ""
+        ui.view = low
+        ui.detail = ""
         safeRender()
         saveAll()
 
@@ -2195,48 +2219,48 @@ local function dexCommand(cmd)
         filter = trimBoth(low:sub(6))
         pending = filter
         safeRender()
-        echo(TAG .. countOf(mobs) .. " mobs, " .. countOf(items)
-            .. " items; showing what matches '" .. filter .. "'.", GOLD)
+        echo(TAG .. countOf(store.mobs) .. " mobs, " .. countOf(store.items)
+            .. " items; showing what matches '" .. filter .. "'.", hue.GOLD)
 
     elseif low == "trace on" or low == "trace off" then
         uiTrace = (low == "trace on")
         if uiTrace then
             echo(TAG .. "every widget event will print. Click and type in the "
-                .. "search box, then 'dbdex trace off'.", GOLD)
+                .. "search box, then 'dbdex trace off'.", hue.GOLD)
         else
-            echo(TAG .. "widget events are quiet again.", GOLD)
+            echo(TAG .. "widget events are quiet again.", hue.GOLD)
         end
 
     elseif low == "here" or low == "all" then
         hereOnly = (low == "here")
         safeRender()
         if hereOnly then
-            echo(TAG .. "mobs in this area only.", GOLD)
+            echo(TAG .. "mobs in this area only.", hue.GOLD)
         else
-            echo(TAG .. "mobs everywhere.", GOLD)
+            echo(TAG .. "mobs everywhere.", hue.GOLD)
         end
 
     elseif low == "clear" then
         filter = ""
         pending = ""
-        detail = ""
+        ui.detail = ""
         safeRender()
 
     elseif low == "link on" or low == "link off" then
         linkOn = (low == "link on")
         if linkOn then
-            echo(TAG .. "a mob with no power level will offer a scan link.", GOLD)
+            echo(TAG .. "a mob with no power level will offer a scan link.", hue.GOLD)
         else
-            echo(TAG .. "scan links off; the panel still has its button.", GOLD)
+            echo(TAG .. "scan links off; the panel still has its button.", hue.GOLD)
         end
 
     elseif low == "forget" then
-        mobs = {}
-        items = {}
+        store.mobs = {}
+        store.items = {}
         forgetOffers()
         saveAll()
         safeRender()
-        echo(TAG .. "everything dropped.", GOLD)
+        echo(TAG .. "everything dropped.", hue.GOLD)
 
     -- 'dbdex sales' for the whole board, 'dbdex sales <name>' for one thing's
     -- history. Player-to-player prices, so it says what something is worth
@@ -2244,7 +2268,7 @@ local function dexCommand(cmd)
     elseif low == "sales" or low:sub(1, 6) == "sales " then
         local want = trimBoth(low:sub(7))
         local rows = {}
-        for _, v in pairs(items) do
+        for _, v in pairs(store.items) do
             local st = nil
             if type(v) == "table" then st = saleStats(v) end
             local hit = false
@@ -2258,11 +2282,11 @@ local function dexCommand(cmd)
 
         if rowCount(rows) == 0 then
             echo(TAG .. "no sales recorded yet. They land as the auction "
-                .. "channel calls them.", GOLD)
+                .. "channel calls them.", hue.GOLD)
         elseif want ~= "" and rowCount(rows) == 1 then
             -- One item named: print every sale it has, newest last.
             local one = rows[1]
-            echo(TAG .. one.name, GOLD)
+            echo(TAG .. one.name, hue.GOLD)
             for _, sale in ipairs(one.rec.sales or {}) do
                 if type(sale) == "table" and safeNum(sale.price) then
                     local when = ""
@@ -2276,7 +2300,7 @@ local function dexCommand(cmd)
                 .. commas(one.st.max) .. ", average " .. commas(one.st.avg)
                 .. " over " .. one.st.count)
         else
-            echo(TAG .. "auction prices, dearest first:", GOLD)
+            echo(TAG .. "auction prices, dearest first:", hue.GOLD)
             for _, r in ipairs(rows) do
                 print("    " .. commas(r.st.avg) .. "  " .. r.name
                     .. "  (" .. r.st.count .. " sale(s), " .. commas(r.st.min)
@@ -2309,7 +2333,7 @@ local function dexCommand(cmd)
             end
             if n == 0 then
                 echo(TAG .. "no keywords learned yet. Stand where one is and "
-                    .. "'dbdex kw <word>' after it offers the wrong one.", GOLD)
+                    .. "'dbdex kw <word>' after it offers the wrong one.", hue.GOLD)
             end
             return
         end
@@ -2329,7 +2353,7 @@ local function dexCommand(cmd)
             if type(at) == "table" then vnum = safeNum(at.num) end
             local found = {}
             if vnum ~= nil then
-                for _, v in pairs(mobs) do
+                for _, v in pairs(store.mobs) do
                     if type(v) == "table" and type(v.name) == "string" then
                         for _, r in ipairs(roomList(v)) do
                             if r == vnum then
@@ -2344,7 +2368,7 @@ local function dexCommand(cmd)
                 who = found[1]
             elseif rowCount(found) > 1 then
                 echo(TAG .. "more than one thing is recorded here. Name it: "
-                    .. "'dbdex kw <word> <mob>'.", GOLD)
+                    .. "'dbdex kw <word> <mob>'.", hue.GOLD)
                 for _, nm in ipairs(found) do print(TAG .. "   " .. nm) end
                 return
             end
@@ -2358,7 +2382,7 @@ local function dexCommand(cmd)
         scanKw[keyOf(who)] = word
         -- Offer it again here rather than making them leave and come back.
         forgetOffers()
-        echo(TAG .. "'" .. who .. "' will be scanned as '" .. word .. "'.", GOLD)
+        echo(TAG .. "'" .. who .. "' will be scanned as '" .. word .. "'.", hue.GOLD)
 
     -- Read everything in this room that has not been read.
     --
@@ -2375,7 +2399,7 @@ local function dexCommand(cmd)
         end
 
         local todo = {}
-        for _, v in pairs(mobs) do
+        for _, v in pairs(store.mobs) do
             if type(v) == "table" and type(v.name) == "string"
                 and safeNum(v.pl) == nil then
                 for _, r in ipairs(roomList(v)) do
@@ -2388,13 +2412,13 @@ local function dexCommand(cmd)
         end
 
         if rowCount(todo) == 0 then
-            echo(TAG .. "nothing here left to read.", GOLD)
+            echo(TAG .. "nothing here left to read.", hue.GOLD)
             return
         end
         bulk.list = todo
         bulk.on = true
         bulk.at = 0
-        echo(TAG .. "reading " .. rowCount(todo) .. ", one at a time.", GOLD)
+        echo(TAG .. "reading " .. rowCount(todo) .. ", one at a time.", hue.GOLD)
 
     elseif low == "diag" then
         print(TAG .. "instance=" .. INSTANCE)
@@ -2406,13 +2430,13 @@ local function dexCommand(cmd)
         else
             print(TAG .. "here: unknown -- getPlayerRoom gave nothing")
         end
-        print(TAG .. "mobs=" .. countOf(mobs) .. " items=" .. countOf(items)
-            .. " sales=" .. sawSales)
+        print(TAG .. "mobs=" .. countOf(store.mobs) .. " items=" .. countOf(store.items)
+            .. " sales=" .. saw.sales)
         -- Each one with its room count. A total says two entries; it does not
         -- say whether one of them has no sightings left, and that is the
         -- difference between correct and a stale bucket sitting in the panel.
         local shownN = 0
-        for k, v in pairs(mobs) do
+        for k, v in pairs(store.mobs) do
             if type(v) == "table" and shownN < 20 then
                 shownN = shownN + 1
                 local rooms = {}
@@ -2422,8 +2446,8 @@ local function dexCommand(cmd)
                     .. " (" .. table.concat(rooms, ",") .. ")  key=" .. tostring(k))
             end
         end
-        print(TAG .. "lines seen: rooms=" .. sawRooms .. " mobs=" .. sawMobs
-            .. " items=" .. sawItems)
+        print(TAG .. "lines seen: rooms=" .. saw.rooms .. " mobs=" .. saw.mobs
+            .. " items=" .. saw.items)
         print(TAG .. "analyze open=" .. tostring(ana.on) .. " on [" .. ana.name .. "]")
         print(TAG .. "scan waiting on [" .. scan.who .. "]")
         -- Which of the map calls this build actually has, and what the scouter
@@ -2444,20 +2468,20 @@ local function dexCommand(cmd)
         print(TAG .. "last widget event: " .. lastUi)
         print(TAG .. "search box holds [" .. pending .. "] filtering on ["
             .. filter .. "]")
-        print(TAG .. "writes flushed: " .. writes
-            .. "  loaded from " .. loadedFrom)
+        print(TAG .. "writes flushed: " .. store.writes
+            .. "  loaded from " .. store.loadedFrom)
         print(TAG .. "lastError=" .. tostring(lastError))
 
     else
-        echo(TAG .. "dbdex show | hide | mobs | items", GOLD)
-        echo("          dbdex find <text>     filter both lists", GOLD)
-        echo("          dbdex clear           drop the filter", GOLD)
-        echo("          dbdex here|all        this area, or everywhere", GOLD)
-        echo("          dbdex trace on|off    print every widget event", GOLD)
-        echo("          dbdex link on|off     offer a scan link in the scroll", GOLD)
-        echo("          dbdex forget          drop everything recorded", GOLD)
-        echo("          dbdex scanall         read everything in this room", GOLD)
-        echo("          dbdex diag            what it knows and where it thinks you are", GOLD)
+        echo(TAG .. "dbdex show | hide | mobs | items", hue.GOLD)
+        echo("          dbdex find <text>     filter both lists", hue.GOLD)
+        echo("          dbdex clear           drop the filter", hue.GOLD)
+        echo("          dbdex here|all        this area, or everywhere", hue.GOLD)
+        echo("          dbdex trace on|off    print every widget event", hue.GOLD)
+        echo("          dbdex link on|off     offer a scan link in the scroll", hue.GOLD)
+        echo("          dbdex forget          drop everything recorded", hue.GOLD)
+        echo("          dbdex scanall         read everything in this room", hue.GOLD)
+        echo("          dbdex diag            what it knows and where it thinks you are", hue.GOLD)
     end
     return true
 end
@@ -2548,7 +2572,7 @@ local function queryMobs(q)
     local want = lower(q.q)
     local area = lower(q.area)
     local out = {}
-    for _, v in pairs(mobs) do
+    for _, v in pairs(store.mobs) do
         if type(v) == "table" and rowCount(roomList(v)) > 0 then
             local ok = true
             if area ~= "" and lower(v.area) ~= area then ok = false end
@@ -2565,7 +2589,7 @@ end
 local function queryItems(q)
     local want = lower(q.q)
     local out = {}
-    for _, v in pairs(items) do
+    for _, v in pairs(store.items) do
         if type(v) == "table" then
             local ok = (want == "")
             if not ok and lower(v.name):find(want, 1, true) then ok = true end
@@ -2621,7 +2645,7 @@ local function route(method, path, q)
     local one = capOf(path, "^/mobs/(.+)$")
     if one ~= nil then
         local found = {}
-        for _, v in pairs(mobs) do
+        for _, v in pairs(store.mobs) do
             if type(v) == "table" and keyOf(v.name) == keyOf(one)
                 and rowCount(roomList(v)) > 0 then
                 push(found, mobOut(v))
@@ -2635,7 +2659,7 @@ local function route(method, path, q)
 
     one = capOf(path, "^/items/(.+)$")
     if one ~= nil then
-        local rec = items[keyOf(one)]
+        local rec = store.items[keyOf(one)]
         if type(rec) ~= "table" then
             return { status = 404, body = nil, err = "no item by that name" }
         end
@@ -2644,7 +2668,7 @@ local function route(method, path, q)
 
     if path == "/areas" then
         local seen, out = {}, {}
-        for _, v in pairs(mobs) do
+        for _, v in pairs(store.mobs) do
             if type(v) == "table" and type(v.area) == "string" and v.area ~= "" then
                 seen[v.area] = (seen[v.area] or 0) + 1
             end
@@ -2659,7 +2683,7 @@ local function route(method, path, q)
     if path == "/sales" then
         local want = lower(q.q)
         local out = {}
-        for _, v in pairs(items) do
+        for _, v in pairs(store.items) do
             local st = nil
             if type(v) == "table" then st = saleStats(v) end
             local hit = false
@@ -2678,7 +2702,7 @@ local function route(method, path, q)
 
     one = capOf(path, "^/sales/(.+)$")
     if one ~= nil then
-        local rec = items[keyOf(one)]
+        local rec = store.items[keyOf(one)]
         local st = nil
         if type(rec) == "table" then st = saleStats(rec) end
         if st == nil then
@@ -2693,8 +2717,8 @@ local function route(method, path, q)
     end
 
     if path == "/stats" then
-        return { status = 200, body = { mobs = countOf(mobs),
-            items = countOf(items), sales = sawSales, version = VERSION } }
+        return { status = 200, body = { mobs = countOf(store.mobs),
+            items = countOf(store.items), sales = saw.sales, version = VERSION } }
     end
 
     return { status = 404, body = nil,
@@ -2759,17 +2783,17 @@ function init()
     -- still wrong when the records are sitting right there.
     --
     -- Backed off, and it stops at the first read that answers.
-    if not loadedOk then
+    if not store.loadedOk then
         local waits = { 250, 600, 1500, 3000, 6000 }
         local again = nil
         again = function(step)
-            if loadedOk then return end
+            if store.loadedOk then return end
             loadAll()
-            if loadedOk then
+            if store.loadedOk then
                 if shown then safeRender() end
                 print(TAG .. "store was not ready at load; picked it up "
                     .. tostring(waits[step]) .. "ms in -- "
-                    .. countOf(mobs) .. " mobs, " .. countOf(items) .. " items.")
+                    .. countOf(store.mobs) .. " mobs, " .. countOf(store.items) .. " items.")
                 return
             end
             local nxt = waits[step + 1]
@@ -2780,7 +2804,7 @@ function init()
         pcall(function() addTimer(waits[1], function() again(1) end) end)
     end
 
-    widget = createWidget({
+    ui.id = createWidget({
         type     = "html",
         name     = "codex",
         title    = "Codex",
@@ -2789,16 +2813,16 @@ function init()
         scrollable = false,
         appearance = { showTitleBar = false, autoHideSettingsCog = true },
     })
-    setWidgetAppearance(widget, {
-        backgroundColor   = PANEL_BG,
-        backgroundOpacity = panelAlpha,
-        borderColor       = GOLD,
+    setWidgetAppearance(ui.id, {
+        backgroundColor   = hue.PANEL_BG,
+        backgroundOpacity = ui.alpha,
+        borderColor       = hue.GOLD,
         borderWidth       = 2,
         borderRadius      = 6,
     })
 
     -- registerWidgetEvent appends, so a reload would stack a second handler
-    pcall(function() unregisterWidgetEvent(widget, "action") end)
+    pcall(function() unregisterWidgetEvent(ui.id, "action") end)
 
     local onAction = function(data)
         if type(data) ~= "table" then return end
@@ -2808,18 +2832,18 @@ function init()
 
         if act == "tab" then
             if arg == "mobs" or arg == "items" or arg == "trainers" then
-                view = arg
-                detail = ""
-                page = 1
+                ui.view = arg
+                ui.detail = ""
+                ui.page = 1
                 safeRender()
                 saveAll()
             end
         elseif act == "item" then
             -- Checked against what is actually stored rather than trusted: this
             -- went out as markup and came back through the client.
-            if type(items[arg]) == "table" then
-                detail = arg
-                view = "items"
+            if type(store.items[arg]) == "table" then
+                ui.detail = arg
+                ui.view = "items"
                 srcOpen = false
                 safeRender()
             end
@@ -2827,7 +2851,7 @@ function init()
             srcOpen = not srcOpen
             safeRender()
         elseif act == "back" then
-            detail = ""
+            ui.detail = ""
             srcOpen = false
             safeRender()
         elseif act == "find" then
@@ -2837,19 +2861,19 @@ function init()
             local v = data.targetValue
             if type(v) == "string" then pending = v end
             filter = trimBoth(pending):lower()
-            detail = ""
-            page = 1
+            ui.detail = ""
+            ui.page = 1
             safeRender()
 
         elseif act == "page" then
-            if arg == "next" then page = page + 1 end
-            if arg == "prev" then page = page - 1 end
-            if page < 1 then page = 1 end
+            if arg == "next" then ui.page = ui.page + 1 end
+            if arg == "prev" then ui.page = ui.page - 1 end
+            if ui.page < 1 then ui.page = 1 end
             safeRender()
 
         elseif act == "scope" then
             hereOnly = not hereOnly
-            page = 1
+            ui.page = 1
             safeRender()
 
         elseif act == "goto" then
@@ -2859,20 +2883,20 @@ function init()
                     walkTo(vnum, function(res)
                         if type(res) == "table" and res.success ~= true then
                             echo(TAG .. "no way there from here"
-                                .. suffixOf(res), UNKNOWN)
+                                .. suffixOf(res), hue.UNKNOWN)
                         end
                     end)
                 end)
                 if not ok2 then
-                    echo(TAG .. "this build cannot walk you there.", UNKNOWN)
+                    echo(TAG .. "this build cannot walk you there.", hue.UNKNOWN)
                 end
             end
 
         elseif act == "clear" then
             filter = ""
             pending = ""
-            detail = ""
-            page = 1
+            ui.detail = ""
+            ui.page = 1
             safeRender()
         elseif act == "scan" then
             -- Letters and single spaces only. This went out as markup and came
@@ -2908,19 +2932,19 @@ function init()
             safeRender(true)
         elseif act == "close" then
             shown = false
-            hideWidget(widget)
+            hideWidget(ui.id)
         end
     end
 
     -- The panel's real height, from the event that reports it. widgetInfo lied
     -- about the size once and cost a release, so this is the number that gets
     -- believed. registerWidgetEvent APPENDS, so the old one goes first.
-    pcall(function() unregisterWidgetEvent(widget, "resize") end)
-    registerWidgetEvent(widget, "resize", function(data)
+    pcall(function() unregisterWidgetEvent(ui.id, "resize") end)
+    registerWidgetEvent(ui.id, "resize", function(data)
         if type(data) ~= "table" then return end
         local h = safeNum(data.height)
-        if h and h > 0 and h ~= panelH then
-            panelH = h
+        if h and h > 0 and h ~= ui.h then
+            ui.h = h
             safeRender()
         end
     end)
@@ -2947,8 +2971,8 @@ function init()
     -- Typing. Captured, NOT applied: rendering on a keystroke would replace the
     -- input and take the focus with it, so nothing is drawn until the search is
     -- submitted. data-mud-action would not do -- an action fires on a click.
-    pcall(function() unregisterWidgetEvent(widget, "keyup") end)
-    registerWidgetEvent(widget, "keyup", function(e)
+    pcall(function() unregisterWidgetEvent(ui.id, "keyup") end)
+    registerWidgetEvent(ui.id, "keyup", function(e)
         noteUi("keyup", e)
         if type(e) ~= "table" then return end
         -- The keyword field, if that is the one being typed in. Captured
@@ -2964,15 +2988,15 @@ function init()
         -- button are what are relied on.
         if e.key == "Enter" then
             filter = trimBoth(pending):lower()
-            detail = ""
-            page = 1
+            ui.detail = ""
+            ui.page = 1
             safeRender()
         end
     end)
 
     -- Enter in the box. The form fires this; the FIND button fires the action.
-    pcall(function() unregisterWidgetEvent(widget, "submit") end)
-    registerWidgetEvent(widget, "submit", function(e)
+    pcall(function() unregisterWidgetEvent(ui.id, "submit") end)
+    registerWidgetEvent(ui.id, "submit", function(e)
         noteUi("submit", e)
         -- Enter in the keyword field saves it, same as the button.
         if kwEdit ~= "" then
@@ -2996,12 +3020,12 @@ function init()
             pending = e.targetValue
         end
         filter = trimBoth(pending):lower()
-        detail = ""
-        page = 1
+        ui.detail = ""
+        ui.page = 1
         safeRender()
     end)
 
-    registerWidgetEvent(widget, "action", function(data)
+    registerWidgetEvent(ui.id, "action", function(data)
         noteUi("action", data)
         local ok, err = pcall(onAction, data)
         if not ok then
@@ -3027,7 +3051,7 @@ function init()
                 bulk.list = left
                 if name == nil then
                     bulk.on = false
-                    echo(TAG .. "done reading the room.", GOLD)
+                    echo(TAG .. "done reading the room.", hue.GOLD)
                 else
                     local word = scanKw[keyOf(name)]
                     if type(word) ~= "string" or word == "" then
@@ -3058,11 +3082,11 @@ function init()
     -- Counted out loud. 'lost everything on restart' and 'never had anything'
     -- read the same on a fresh panel, and this is the line that tells them
     -- apart without being asked for.
-    print(TAG .. "ready. restored " .. countOf(mobs) .. " mobs, "
-        .. countOf(items) .. " items from " .. loadedFrom
+    print(TAG .. "ready. restored " .. countOf(store.mobs) .. " mobs, "
+        .. countOf(store.items) .. " items from " .. store.loadedFrom
         .. ". 'dbdex' for what it does.")
     -- Whatever it came out of, it goes back into the global one.
-    if countOf(mobs) > 0 or countOf(items) > 0 then saveAll() end
+    if countOf(store.mobs) > 0 or countOf(store.items) > 0 then saveAll() end
 end
 
 -- What a trainer just said. Three lines, all verbatim off the stream.
@@ -3164,7 +3188,7 @@ function onLine(sessionId, rawLine, cleanLine)
             touched = true
         end
 
-        if clean:find("[R#", 1, true) then sawRooms = sawRooms + 1 end
+        if clean:find("[R#", 1, true) then saw.rooms = saw.rooms + 1 end
 
         if touched then
             saveAll()

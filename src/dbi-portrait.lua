@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.16.001",
+    version     = "2026.08.16.002",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -47,7 +47,12 @@ local AVATAR_BASE = "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mud
 -- One table rather than a name each. Lua 5.1 allows a chunk 200 locals and this
 -- file is at the ceiling, so a dozen colours spent a dozen of them; as fields
 -- they cost one and the next feature gets the room back.
-local C = {
+-- The panel itself: the widget id, the background alpha, which view is up,
+-- how the power level is shown, the tabs, the font, the level colours and the
+-- palette. Eight file-scope locals about one thing.
+local panel = {}
+
+panel.C = {
     hp       = "#ea3c3f",
     ki       = "#00acf3",
     stam     = "#5ec966",
@@ -65,7 +70,7 @@ local C = {
 -- Where a bar changes character, mapped onto the same palette: energy at the
 -- first threshold, then deeper, then the health red. 15% is the one that
 -- matters -- red and moving.
-local LV = { warn = 60, low = 30, crit = 15 }
+panel.LV = { warn = 60, low = 30, crit = 15 }
 
 
 -- Where a bar changes character, mapped onto the same palette: energy at the
@@ -74,7 +79,7 @@ local LV = { warn = 60, low = 30, crit = 15 }
 
 
 -- The terminal's font, and the user's multiplier over it.
-local font = {
+panel.font = {
     fallback = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
     family   = "",
     size     = 13,
@@ -90,7 +95,12 @@ local gag = { on = false, triggerId = nil, ids = {}, sig = "", tag = "" }
 --
 -- One table for the lot. Nine names for one subject is nine of the 200 a chunk
 -- gets, and this file ran out of them.
-local prompt = {
+-- The prompt: what it currently is, the roles a field can play, the text
+-- forms, the pattern pieces and their cap, the prompts already known, and
+-- what has been learned for whom. Eight file-scope locals, one subject.
+local pr = {}
+
+pr.cur = {
     learned = {},               -- the formats, as the user set them
     set     = nil,              -- the compiled set in use
     roles   = nil,              -- which fields each compiled line yields
@@ -105,10 +115,10 @@ local prompt = {
 -- The GMCP handshake, which Scouter usually owns.
 local nego = { connected = false, tick = 0, done = false }
 
-local widget = nil
-local panelAlpha = 1
-local view = "portrait"      -- or "sheet"
-local plMode = "bar"         -- or "nums": Base PL | Curr PL side by side
+panel.id = nil
+panel.alpha = 1
+panel.view = "portrait"      -- or "sheet"
+panel.plMode = "bar"         -- or "nums": Base PL | Curr PL side by side
 local avatarUrl = ""         -- override, per character
 local lastError = "none"
 
@@ -137,9 +147,13 @@ local lastError = "none"
 -- Kept per character, alongside the sheet and the avatar. A Saiyan's Super
 -- Saiyan line means nothing on a Namekian, and an alt inheriting the list would
 -- transform on someone else's text.
-local FORMS = {}
-local formUrl = ""           -- the active form's image, "" = base
-local formName = ""
+-- Transformations: the known forms, the picture for the one we are in, and
+-- its name.
+local form = {}
+
+form.ALL = {}
+form.url = ""           -- the active form's image, "" = base
+form.name = ""
 
 -- char.vitals, owned copy
 -- What you are actually doing, watched off the lines that say so.
@@ -208,7 +222,15 @@ local onTarget = nil
 local pd = { tries = 0, hits = 0, buildErr = nil, readErr = nil, scoreSaw = "" }
 
 local sc = {}
-local scoreSeen = false
+-- Reading the score sheet: whether we are inside the block, how many lines
+-- in, the cap, and whether one has been seen at all.
+--
+-- Separate from 'sc', which holds what was READ. sc is reassigned wholesale
+-- when a profile loads -- 'sc = prof.sc' -- so anything folded into it that
+-- outlives one sheet, the cap especially, would be wiped by a profile switch.
+local sheet = {}
+
+sheet.seen = false
 
 -- Everything the panel knows, kept per character.
 --
@@ -220,26 +242,42 @@ local scoreSeen = false
 -- The vitals are deliberately NOT kept. They arrive from GMCP within seconds
 -- of connecting, and a stale bar reading full lifeforce on a character sitting
 -- at twenty percent is worse than an empty one.
-local profiles = {}
-local profileKey = ""
-local headerName
+-- Which character this is, and what is kept per character: the store, the
+-- key into it, the name off the panel header, whether profiles are used at
+-- all, and a name set by hand.
+--
+-- Not 'who' -- that is a local on three lines of this file, one of them
+-- 'local who = who.key', which reads the outer name and then hides it.
+local profile = {}
 
+profile.all = {}
+profile.key = ""
+profile.header = nil
 -- Assigned once saveSettings exists. readHeader calls this hundreds of lines
 -- before either is declared, and a file-scope local used above its declaration
 -- resolves as a nil global here rather than erroring.
-local useProfile = function() end
+profile.use = function() end
 
 -- score arrives as a block; these bound it
-local inScore = false
-local scoreLines = 0
-local SCORE_MAX = 60
+sheet.inBlock = false
+sheet.lines = 0
+sheet.MAX = 60
 
 -- The rank and the name sit ABOVE the block's first rule, so by the time
 -- 'STRENGTH:' identifies the block they have already gone past. Three lines of
 -- look-behind is enough to reach back for them.
 local recent = { "", "", "" }
-local nameOverride = ""
-local inEq = false
+profile.override = ""
+-- The item tabs: what has been read, whether it is trusted, the caps and the
+-- words worth skipping. Eight file-scope locals for one feature.
+--
+-- Called 'gear' rather than the obvious 'item' because 'item' is a local on
+-- 64 lines of this file -- including 'local slot, item = line:match(...)'
+-- two lines above where inEq is cleared, which would have put that assignment
+-- onto the matched string.
+local gear = {}
+
+gear.inEq = false
 
 -- Core.Hello and the supports Add belong to whichever of our plugins loads
 -- first. Add merges rather than replaces, and 'Map 1' turns on char stats as
@@ -609,7 +647,7 @@ local function readHeader()
     -- Swapped BEFORE anything is written, because useProfile rebinds sc. Doing
     -- it the other way round put this score's name and rank into the previous
     -- character's sheet and then swapped that sheet out from under them.
-    if first then useProfile(first) end
+    if first then profile.use(first) end
 
     if rank ~= "" and not rank:find("—", 1, true) then sc.rank = rank end
 
@@ -621,9 +659,9 @@ local function readHeader()
         if last then sc.name = first .. " " .. last end
     end
 
-    if nameOverride ~= "" then
-        sc.first = nameOverride
-        sc.name = nameOverride
+    if profile.override ~= "" then
+        sc.first = profile.override
+        sc.name = profile.override
     end
 end
 
@@ -665,36 +703,36 @@ local function parseLook(line)
 
     if line:find("You are using:", 1, true) then
         sc.eq = {}
-        inEq = true
+        gear.inEq = true
         return false
     end
 
-    if inEq then
+    if gear.inEq then
         local slot, item = line:match("^<(.+)>%s+(.+)$")
         if slot and sc.eq then
             sc.eq[#sc.eq + 1] = { slot = trimBoth(slot), item = trimBoth(item) }
             return true
         end
-        inEq = false
+        gear.inEq = false
     end
     return false
 end
 
 local function feedScore(clean)
-    if inScore then
-        scoreLines = scoreLines + 1
+    if sheet.inBlock then
+        sheet.lines = sheet.lines + 1
         parseScoreLine(clean)
-        if clean:find("CurrTime", 1, true) or scoreLines > SCORE_MAX then
-            inScore = false
-            scoreSeen = true
+        if clean:find("CurrTime", 1, true) or sheet.lines > sheet.MAX then
+            sheet.inBlock = false
+            sheet.seen = true
             return true
         end
         return false
     end
 
     if clean:find("STRENGTH:", 1, true) then
-        inScore = true
-        scoreLines = 1
+        sheet.inBlock = true
+        sheet.lines = 1
         readHeader()
         parseScoreLine(clean)
         return false
@@ -722,7 +760,7 @@ end
 -- stays right; it just has nowhere to put the value. Naming them all means a
 -- prompt carrying racial power, biomass or the sector name hands those over for
 -- free the moment something wants them.
-local PROMPT_ROLE = {
+pr.ROLE = {
     h = "lf",       H = "lfMax",    m = "ki",         M = "kiMax",
     x = "plBase",   X = "plCur",    p = "plBase",     P = "plCur",
     y = "foe",      g = "zeni",     z = "ar",         Z = "arMax",
@@ -738,9 +776,9 @@ local PROMPT_ROLE = {
 -- What a %-token compiles to. num and any are the same pattern today; they are
 -- separate names because the two mean different things and one of them will
 -- eventually tighten.
-local P = { num = "(%S*)", any = "(%S*)", txt = "(.*)" }
+pr.P = { num = "(%S*)", any = "(%S*)", txt = "(.*)" }
 
-local PROMPT_TEXT = {
+pr.TEXT = {
     style = true, sector = true, sunlight = true, clock = true,
     auction = true, racialTimer = true, plColour = true,
 }
@@ -767,7 +805,7 @@ local PROMPT_TEXT = {
 -- longest format the MUD documents compiles to about 250 -- but a format typed
 -- by hand is arbitrary text, and a pattern over the cap is refused at the point
 -- it would have been armed rather than at the point it was written.
-local PAT_MAX = 1024
+pr.MAX = 1024
 
 -- '|' is in the set deliberately. It is not special in a real Lua pattern, so
 -- leaving it bare reads correctly here and the suite stays green -- but this
@@ -870,19 +908,19 @@ local function promptCompile(fmt)
                     pat = pat .. promptEsc(lit)
                     rx = rx .. promptRx(lit)
                     lit = ""
-                    local role = PROMPT_ROLE[code]
+                    local role = pr.ROLE[code]
                     roles[#roles + 1] = role or false
                     -- Every token is a capture group in the regex too, so a
                     -- trigger callback can read them positionally: captures[n]
                     -- lines up with roles[n].
-                    if role and PROMPT_TEXT[role] then
-                        pat = pat .. P.txt
+                    if role and pr.TEXT[role] then
+                        pat = pat .. pr.P.txt
                         rx = rx .. "(.*)"
                     elseif role then
-                        pat = pat .. P.num
+                        pat = pat .. pr.P.num
                         rx = rx .. "(\\S*)"
                     else
-                        pat = pat .. P.any
+                        pat = pat .. pr.P.any
                         rx = rx .. "(\\S*)"
                     end
                     k = k + 2
@@ -957,7 +995,7 @@ end
 -- The stock pair is written from what it prints rather than copied from the
 -- server -- there is no way to read another player's format -- and it is
 -- checked against 15,000 real lines in the suite.
-local KNOWN_PROMPTS = {
+pr.KNOWN = {
     "(LifeForce:<%h> Ki:<%m>)%Y(PowerLevel:<%x|%X>)",
     -- The stock FIGHT prompt is one line: lifeforce, the enemy, and Ki with the
     -- K shouting. No powerlevel line under it.
@@ -985,7 +1023,7 @@ local KNOWN_PROMPTS = {
 -- the settings page needs a box per prompt and has to know which is which.
 -- Which command was last issued with an argument, so the MUD's "Replacing old
 -- prompt of:" can be answered with a read-back of the right one.
-local learnedFor = { prompt = nil, fprompt = nil }
+pr.learnedFor = { prompt = nil, fprompt = nil }
 
 -- What a 'prompt' or 'fprompt' round trip is waiting for. One table rather than
 -- three names -- the chunk is at Lua 5.1's 200-local ceiling and these three
@@ -1005,8 +1043,7 @@ local edit = { prompt = "", fprompt = "", avatar = "", name = "",
 -- Which compiled lines this session has actually seen. The gag is built from
 -- these rather than from all ten built-in formats -- registering a trigger for
 -- every prompt the MUD documents would hide other players' pasted prompts.
-local armPrompt
-
+pr.arm = nil
 -- Set when the line just seen was the last line of a prompt whose format ends
 -- in a newline. The blank line that follows is part of the prompt and goes with
 -- it when gagging, but only then -- a bare '^$' trigger would flatten every
@@ -1068,12 +1105,12 @@ end
 local charState = {}
 
 local function promptRebuild()
-    prompt.set = {}
+    pr.cur.set = {}
     -- Each stage says which one failed. A single pcall further up reports
     -- "something threw" and there are four candidates behind it.
-    local ok, err = pcall(promptAdd, prompt.set, prompt.learned)
+    local ok, err = pcall(promptAdd, pr.cur.set, pr.cur.learned)
     if not ok then pd.buildErr = "learned: " .. tostring(err) end
-    ok, err = pcall(promptAdd, prompt.set, KNOWN_PROMPTS)
+    ok, err = pcall(promptAdd, pr.cur.set, pr.KNOWN)
     if not ok then pd.buildErr = "known: " .. tostring(err) end
 end
 
@@ -1109,24 +1146,24 @@ local function promptLearn(fmt, quiet)
 
     for _, m in ipairs(compiled) do
         local widest = #m.rx
-        if widest > PAT_MAX then
+        if widest > pr.MAX then
             echo(TAG .. "that format is too long to gag -- it needs a trigger of "
-                .. widest .. " characters and the limit is " .. PAT_MAX .. ".",
+                .. widest .. " characters and the limit is " .. pr.MAX .. ".",
                 "#ffb02e")
             echo("          It will still be read; only hiding it is off.", "#ffb02e")
         end
     end
 
-    for _, have in ipairs(prompt.learned) do
+    for _, have in ipairs(pr.cur.learned) do
         if have == text then return false end
     end
 
-    prompt.learned[#prompt.learned + 1] = text
+    pr.cur.learned[#pr.cur.learned + 1] = text
     promptRebuild()
-    pcall(armPrompt)
+    pcall(pr.arm)
     if not quiet then
         echo(TAG .. "learned your prompt: " .. #compiled .. " line(s), "
-            .. "reading " .. tostring(prompt.roles(compiled)) .. ".", C.energy)
+            .. "reading " .. tostring(pr.cur.roles(compiled)) .. ".", panel.C.energy)
     end
     return true
 end
@@ -1140,7 +1177,7 @@ end
 --
 --   loadPlugin(): Cannot declare a function that shadows a let/const/class/
 --   function variable 'promptRoles'
-prompt.roles = function(compiled)
+pr.cur.roles = function(compiled)
     local seen, order = {}, {}
     for _, m in ipairs(compiled) do
         for _, role in ipairs(m.roles) do
@@ -1159,7 +1196,7 @@ end
 -- out: "Solao tells you: 'LF:<88> Ki:<900>'" has the fields but not at the
 -- front.
 local function promptScan(text)
-    for _, m in ipairs(prompt.set) do
+    for _, m in ipairs(pr.cur.set) do
         -- Captured into named locals rather than '{ text:match(pat) }'. A
         -- multi-value return wrapped in a table constructor is the shape sharp
         -- edge 4 is about, and no format here needs more than ten -- the widest
@@ -1176,13 +1213,13 @@ local function promptScan(text)
         -- ending an item capture on its own header line.
         if type(c1) == "string" then
             for _, sib in ipairs(m.kin or { m }) do
-                if sib.rx and not prompt.used[sib.rx] then
-                    prompt.used[sib.rx] = true
-                    prompt.order[#prompt.order + 1] = sib.rx
-                    prompt.sig = prompt.sig .. sib.rx .. "\n"
+                if sib.rx and not pr.cur.used[sib.rx] then
+                    pr.cur.used[sib.rx] = true
+                    pr.cur.order[#pr.cur.order + 1] = sib.rx
+                    pr.cur.sig = pr.cur.sig .. sib.rx .. "\n"
                 end
             end
-            prompt.blank = m.blankAfter == true
+            pr.cur.blank = m.blankAfter == true
             local got = { head = m.head }
             for n, role in ipairs(m.roles) do
                 local v = caps[n]
@@ -1195,7 +1232,7 @@ local function promptScan(text)
 end
 
 local function promptRead(clean)
-    if not prompt.set then promptRebuild() end
+    if not pr.cur.set then promptRebuild() end
     local text = trimBoth(clean)
     if text == "" then return nil end
 
@@ -1254,11 +1291,11 @@ local function notePrompt(clean)
         -- fight every time someone quoted their own prompt at you.
         local at = low:gsub("^%(", "")
         if at:sub(1, 10) == "lifeforce:" then
-            prompt.tag = "LifeForce:"
+            pr.cur.tag = "LifeForce:"
             return true
         end
         if at:sub(1, 3) == "lf:" then
-            prompt.tag = "LF:"
+            pr.cur.tag = "LF:"
             return true
         end
     end
@@ -1382,7 +1419,7 @@ end
 local function matchForm(lowLine)
     local bestName, bestUrl, bestLen = nil, nil, -1
     local bestDirect = false
-    for name, f in pairs(FORMS) do
+    for name, f in pairs(form.ALL) do
         if type(f) == "table" and has(f.pat) then
             local pat = tostring(f.pat):lower()
             local direct = lowLine:find(pat, 1, true) ~= nil
@@ -1445,9 +1482,9 @@ local function feedForm(clean)
         newUrl = ""
         newName = ""
     end
-    if formUrl == newUrl and formName == newName then return false end
-    formUrl = newUrl
-    formName = newName
+    if form.url == newUrl and form.name == newName then return false end
+    form.url = newUrl
+    form.name = newName
     return true
 end
 
@@ -1537,8 +1574,8 @@ local function acceptInfo(v)
         -- exactly what happened, and the headline read 'Unknown' with the
         -- profile correctly keyed on 'solao' right beside it.
         local key = nm:lower()
-        if key ~= profileKey then
-            useProfile(key)
+        if key ~= profile.key then
+            profile.use(key)
             got = true
         end
         if sc.first ~= nm then
@@ -1566,7 +1603,7 @@ local function acceptInfo(v)
     -- The sheet is gated on having seen a character at all, and now we have.
     -- The rows GMCP cannot fill stay empty until a score is typed; row() drops
     -- an empty one rather than printing a blank.
-    if got then scoreSeen = true end
+    if got then sheet.seen = true end
     return got
 end
 
@@ -1681,19 +1718,19 @@ local function readTerminalFont()
     if not good or type(f) ~= "table" then return end
 
     if type(f.family) == "string" and f.family ~= "" then
-        font.family = f.family:gsub("[;}<>]", "")
+        panel.font.family = f.family:gsub("[;}<>]", "")
     end
     local n = safeNum(f.size)
-    if n and n >= 6 and n <= 72 then font.size = math.floor(n) end
+    if n and n >= 6 and n <= 72 then panel.font.size = math.floor(n) end
 end
 
 local function chromeFont()
-    if font.family ~= "" then return font.family .. "," .. font.fallback end
-    return font.fallback
+    if panel.font.family ~= "" then return panel.font.family .. "," .. panel.font.fallback end
+    return panel.font.fallback
 end
 
-local function barSize()  return math.max(7, math.floor(font.size * 0.60 * font.scale)) end
-local function bodySize() return math.max(9, math.floor(font.size * 0.82 * font.scale)) end
+local function barSize()  return math.max(7, math.floor(panel.font.size * 0.60 * panel.font.scale)) end
+local function bodySize() return math.max(9, math.floor(panel.font.size * 0.82 * panel.font.scale)) end
 
 ----------------------------------------------------------------------
 -- rendering
@@ -1822,7 +1859,7 @@ local function applyImage(url, onOk)
         echo(TAG .. "http to go and look. Use the direct image url.", "#ff6666")
         return
     end
-    echo(TAG .. "that looks like a page; asking it for the image...", C.energy)
+    echo(TAG .. "that looks like a page; asking it for the image...", panel.C.energy)
     local asked = u
     httpTable.get(u, nil, function(status, body, err)
         if err or not status or status >= 400 then
@@ -1849,7 +1886,7 @@ end
 -- instead of a broken-image glyph, which is the failure people actually get.
 local function avatarCss()
     -- the active form outranks the manual override, which outranks the race
-    local url = formUrl
+    local url = form.url
     if url == "" then url = avatarUrl end
     if url == "" then
         local race = slug(sc.race)
@@ -1883,52 +1920,52 @@ local function css()
     local t = {}
     local function add(x) t[#t + 1] = x end
 
-    local a = panelAlpha
+    local a = panel.alpha
     add("<style>")
     add(".dbi-port{position:relative;height:100%;box-sizing:border-box;")
     add("display:flex;flex-direction:column;container-type:inline-size;overflow:hidden;")
-    add("background:rgba(" .. C.card_rgb .. "," .. a .. ");color:" .. C.ink .. ";")
+    add("background:rgba(" .. panel.C.card_rgb .. "," .. a .. ");color:" .. panel.C.ink .. ";")
     add("font-family:" .. chromeFont() .. ";}")
 
         -- header: the title, a live pulse, and the controls
     add(".dbi-port .bar{flex:0 0 auto;display:flex;align-items:center;gap:6px;")
     add("padding:6px 10px;border-bottom:1px solid rgba(251,124,0,0.25);")
     add("font-size:" .. barSize() .. "px;font-weight:600;letter-spacing:0.2em;")
-    add("text-transform:uppercase;color:" .. C.energy .. ";}")
+    add("text-transform:uppercase;color:" .. panel.C.energy .. ";}")
     add(".dbi-port .bar .ttl{flex:1 1 auto;min-width:0;overflow:hidden;")
     add("text-overflow:ellipsis;white-space:nowrap;}")
     add(".dbi-port .dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;")
-    add("background:" .. C.stam .. ";box-shadow:0 0 6px " .. C.stam .. ";")
+    add("background:" .. panel.C.stam .. ";box-shadow:0 0 6px " .. panel.C.stam .. ";")
     add("animation:hudPulse 2s ease-in-out infinite;}")
     add("@keyframes hudPulse{0%,100%{opacity:1}50%{opacity:0.35}}")
     add(".dbi-port .tb{flex:0 0 auto;font-size:" .. barSize() .. "px;letter-spacing:0.1em;")
     add("text-transform:uppercase;padding:2px 5px;border-radius:2px;")
-    add("border:1px solid " .. C.rule .. ";color:" .. C.ink_dim .. ";")
+    add("border:1px solid " .. panel.C.rule .. ";color:" .. panel.C.ink_dim .. ";")
     add("cursor:pointer;user-select:none;white-space:nowrap;}")
-    add(".dbi-port .tb:hover{color:" .. C.ink .. ";border-color:" .. C.energy .. ";}")
+    add(".dbi-port .tb:hover{color:" .. panel.C.ink .. ";border-color:" .. panel.C.energy .. ";}")
     -- pushes the buttons to the right of the title
     add(".dbi-port .sp{flex:1 1 auto;}")
 
     -- The tab strip. Fixed under the portrait, so it stays put while the body
     -- scrolls -- which is the whole reason the face was hoisted out of it.
     add(".dbi-port .tabs{flex:0 0 auto;display:flex;gap:3px;padding:5px 6px 0 6px;")
-    add("border-bottom:1px solid " .. C.rule .. ";}")
+    add("border-bottom:1px solid " .. panel.C.rule .. ";}")
     add(".dbi-port .tab{flex:1 1 0;text-align:center;cursor:pointer;")
     add("user-select:none;white-space:nowrap;overflow:hidden;")
     add("font-size:" .. barSize() .. "px;letter-spacing:0.06em;")
     add("text-transform:uppercase;padding:4px 2px;border-radius:3px 3px 0 0;")
-    add("border:1px solid " .. C.rule .. ";border-bottom:none;")
-    add("color:" .. C.ink_dim .. ";background:rgba(255,255,255,0.02);}")
-    add(".dbi-port .tab:hover{color:" .. C.ink .. ";}")
+    add("border:1px solid " .. panel.C.rule .. ";border-bottom:none;")
+    add("color:" .. panel.C.ink_dim .. ";background:rgba(255,255,255,0.02);}")
+    add(".dbi-port .tab:hover{color:" .. panel.C.ink .. ";}")
 
     -- Footer, pinned under the body. Only drawn when it has something in it.
     add(".dbi-port .foot{flex:0 0 auto;display:flex;gap:4px;flex-wrap:wrap;")
     add("justify-content:center;")
-    add("padding:4px 6px;border-top:1px solid " .. C.rule .. ";}")
+    add("padding:4px 6px;border-top:1px solid " .. panel.C.rule .. ";}")
     add(".dbi-port .fpill{font-size:clamp(9px,3cqw,12px);padding:2px 7px;")
     add("border-radius:9px;cursor:pointer;user-select:none;")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")
-    add("border:1px solid " .. C.auc .. ";color:" .. C.auc .. ";")
+    add("border:1px solid " .. panel.C.auc .. ";color:" .. panel.C.auc .. ";")
     add("background:rgba(168,120,255,0.10);}")
     add(".dbi-port .fpill:hover{background:rgba(168,120,255,0.22);}")
 
@@ -1946,16 +1983,16 @@ local function css()
     add("white-space:nowrap;}")
     add(".dbi-port .ib{flex:0 0 auto;font-size:clamp(8px,2.6cqw,11px);")
     add("padding:1px 5px;border-radius:2px;cursor:pointer;user-select:none;")
-    add("border:1px solid " .. C.rule .. ";color:" .. C.ink_dim .. ";}")
-    add(".dbi-port .ib:hover{color:" .. C.energy .. ";border-color:" .. C.energy .. ";}")
+    add("border:1px solid " .. panel.C.rule .. ";color:" .. panel.C.ink_dim .. ";}")
+    add(".dbi-port .ib:hover{color:" .. panel.C.energy .. ";border-color:" .. panel.C.energy .. ";}")
     -- contents of an open container, indented under it
     add(".dbi-port .isub{padding:0 0 0 14px;font-size:clamp(9px,3cqw,13px);")
-    add("color:" .. C.ink_dim .. ";overflow:hidden;text-overflow:ellipsis;")
-    add("white-space:nowrap;border-left:1px solid " .. C.rule .. ";")
+    add("color:" .. panel.C.ink_dim .. ";overflow:hidden;text-overflow:ellipsis;")
+    add("white-space:nowrap;border-left:1px solid " .. panel.C.rule .. ";")
     add("margin-left:4px;}")
     add(".dbi-port .iempty{font-style:italic;}")
 
-    add(".dbi-port .stale{font-size:" .. barSize() .. "px;color:" .. C.ink_dim .. ";")
+    add(".dbi-port .stale{font-size:" .. barSize() .. "px;color:" .. panel.C.ink_dim .. ";")
     add("padding:0 0 4px 0;font-style:italic;}")
     -- the refresh sits on its own line above the rows, right aligned, so it
     -- does not join the scrum of buttons every row already carries
@@ -1964,9 +2001,9 @@ local function css()
     -- the slot, as its own column on the equipment tab. Fixed width so the
     -- names line up down the panel rather than starting wherever the slot ended
     add(".dbi-port .islot{flex:0 0 4.6em;font-size:clamp(8px,2.5cqw,10px);")
-    add("letter-spacing:0.08em;text-transform:uppercase;color:" .. C.ink_dim .. ";")
+    add("letter-spacing:0.08em;text-transform:uppercase;color:" .. panel.C.ink_dim .. ";")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
-    add(".dbi-port .tab.sel{color:" .. C.energy .. ";border-color:" .. C.energy .. ";")
+    add(".dbi-port .tab.sel{color:" .. panel.C.energy .. ";border-color:" .. panel.C.energy .. ";")
     add("background:rgba(251,124,0,0.12);}")
 
     -- Both labels ship and CSS picks one. widgetInfo lies about the panel size
@@ -1977,7 +2014,7 @@ local function css()
     add("@container (max-width: 260px){")
     add(".dbi-port .tl{display:none;}")
     add(".dbi-port .ts{display:inline;}}")
-    add(".dbi-port .tb.on{color:" .. C.energy .. ";border-color:" .. C.energy .. ";")
+    add(".dbi-port .tb.on{color:" .. panel.C.energy .. ";border-color:" .. panel.C.energy .. ";")
     add("background:rgba(251,124,0,0.12);}")
 
     add(".dbi-port .body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;}")
@@ -1994,16 +2031,16 @@ local function css()
     add("background-size:100% auto;background-position:center top;")
     add("background-repeat:no-repeat;}")
     add(".dbi-port .face::before{content:\'\';position:absolute;inset:0;")
-    add("background:linear-gradient(to top,rgba(" .. C.card_rgb .. ",1) 0%,")
-    add("rgba(" .. C.card_rgb .. ",0.3) 45%,transparent 100%);}")
+    add("background:linear-gradient(to top,rgba(" .. panel.C.card_rgb .. ",1) 0%,")
+    add("rgba(" .. panel.C.card_rgb .. ",0.3) 45%,transparent 100%);}")
     add(".dbi-port .face::after{content:\'\';position:absolute;inset:0;opacity:0.4;")
     add("background:repeating-linear-gradient(to bottom,rgba(255,255,255,0.04) 0 1px,")
     add("transparent 1px 3px);}")
     add(".dbi-port .over{position:absolute;left:0;right:0;bottom:0;padding:10px;z-index:2;}")
-    add(".dbi-port .nm{font-size:190%;font-weight:700;line-height:1;color:" .. C.energy .. ";")
+    add(".dbi-port .nm{font-size:190%;font-weight:700;line-height:1;color:" .. panel.C.energy .. ";")
     add("text-shadow:0 1px 6px rgba(0,0,0,0.8);}")
-    add(".dbi-port .sub{margin-top:3px;font-size:" .. bodySize() .. "px;color:" .. C.stam .. ";}")
-    add(".dbi-port .sub i{color:" .. C.ink_dim .. ";font-style:normal;margin:0 4px;}")
+    add(".dbi-port .sub{margin-top:3px;font-size:" .. bodySize() .. "px;color:" .. panel.C.stam .. ";}")
+    add(".dbi-port .sub i{color:" .. panel.C.ink_dim .. ";font-style:normal;margin:0 4px;}")
 
     add(".dbi-port .pad{display:flex;flex-direction:column;gap:10px;padding:10px;}")
 
@@ -2013,14 +2050,14 @@ local function css()
     add("border:1px solid rgba(251,124,0,0.3);background:rgba(0,0,0,0.4);}")
     add(".dbi-port .pl:hover{border-color:rgba(251,124,0,0.65);}")
     add(".dbi-port .pl .k{font-size:" .. barSize() .. "px;font-weight:600;")
-    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. C.ink_dim .. ";}")
+    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. panel.C.ink_dim .. ";}")
     -- The figure is the widest thing in the panel, so it tracks the panel's own
     -- width rather than the font size. A fixed 150% put a six-digit power level
     -- shoulder to shoulder with its label in a narrow column.
-    local plLo = math.max(11, math.floor(font.size * 0.95 * font.scale))
-    local plHi = math.max(16, math.floor(font.size * 1.7 * font.scale))
+    local plLo = math.max(11, math.floor(panel.font.size * 0.95 * panel.font.scale))
+    local plHi = math.max(16, math.floor(panel.font.size * 1.7 * panel.font.scale))
     add(".dbi-port .pl .v{font-size:clamp(" .. plLo .. "px,6.5cqw," .. plHi .. "px);")
-    add("font-weight:700;color:" .. C.energy .. ";")
+    add("font-weight:700;color:" .. panel.C.energy .. ";")
     add("text-shadow:0 0 8px rgba(251,124,0,0.6);white-space:nowrap;}")
 
         -- numeric mode: Base PL and Curr PL side by side in the same frame, so
@@ -2030,15 +2067,15 @@ local function css()
     add("gap:2px;min-width:0;}")
     add(".dbi-port .pl.nums .v{font-size:clamp(" .. math.max(10, math.floor(plLo * 0.8))
         .. "px,4.5cqw," .. math.max(13, math.floor(plHi * 0.75)) .. "px);}")
-    add(".dbi-port .pl .sep{color:" .. C.ink_dim .. ";font-weight:400;}")
+    add(".dbi-port .pl .sep{color:" .. panel.C.ink_dim .. ";font-weight:400;}")
 
         -- bars: thin, rounded, gradient into a glow
     add(".dbi-port .mt{display:flex;flex-direction:column;gap:4px;}")
     add(".dbi-port .mtl{display:flex;align-items:baseline;justify-content:space-between;")
     add("gap:6px;font-size:" .. barSize() .. "px;letter-spacing:0.14em;text-transform:uppercase;}")
-    add(".dbi-port .mtl .lbl{color:" .. C.ink_dim .. ";}")
-    add(".dbi-port .mtl .num{color:" .. C.ink .. ";white-space:nowrap;}")
-    add(".dbi-port .mtl .pc{color:" .. C.ink_dim .. ";margin-left:4px;}")
+    add(".dbi-port .mtl .lbl{color:" .. panel.C.ink_dim .. ";}")
+    add(".dbi-port .mtl .num{color:" .. panel.C.ink .. ";white-space:nowrap;}")
+    add(".dbi-port .mtl .pc{color:" .. panel.C.ink_dim .. ";margin-left:4px;}")
     add(".dbi-port .trk{position:relative;height:8px;border-radius:999px;overflow:hidden;")
     add("background:rgba(0,0,0,0.5);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.05);}")
     add(".dbi-port .fil{position:absolute;top:0;bottom:0;left:0;border-radius:999px;")
@@ -2046,17 +2083,17 @@ local function css()
     add("box-shadow:0 0 8px 0 var(--c);")
     add("transition:width 500ms cubic-bezier(0.22,1,0.36,1);}")
 
-    add(".dbi-port .mt.lf{--c:" .. C.hp .. ";}")
-    add(".dbi-port .mt.ki{--c:" .. C.ki .. ";}")
-    add(".dbi-port .mt.ar{--c:" .. C.gold .. ";}")
+    add(".dbi-port .mt.lf{--c:" .. panel.C.hp .. ";}")
+    add(".dbi-port .mt.ki{--c:" .. panel.C.ki .. ";}")
+    add(".dbi-port .mt.ar{--c:" .. panel.C.gold .. ";}")
     -- ki runs its own ramp, deep water into bright cyan, rather than the shared
     -- dark-into-colour one
     add(".dbi-port .mt.ki .fil{background:linear-gradient(90deg,#0a2c55,#0077cc 55%,#33c6ff);}")
-    add(".dbi-port .mt.pw{--c:" .. C.stam .. ";}")
-    add(".dbi-port .mt.foe{--c:" .. C.foe .. ";}")
-    add(".dbi-port .mt.warn{--c:" .. C.energy .. ";}")
+    add(".dbi-port .mt.pw{--c:" .. panel.C.stam .. ";}")
+    add(".dbi-port .mt.foe{--c:" .. panel.C.foe .. ";}")
+    add(".dbi-port .mt.warn{--c:" .. panel.C.energy .. ";}")
     add(".dbi-port .mt.low{--c:#e05a10;}")
-    add(".dbi-port .mt.crit{--c:" .. C.hp .. ";}")
+    add(".dbi-port .mt.crit{--c:" .. panel.C.hp .. ";}")
     add(".dbi-port .mt.low .pc,.dbi-port .mt.crit .pc{color:var(--c);}")
     add("@keyframes hudBreathe{0%,100%{opacity:1}50%{opacity:0.55}}")
     add("@keyframes hudFlash{0%,100%{opacity:1}50%{opacity:0.4}}")
@@ -2069,22 +2106,22 @@ local function css()
 
         -- attributes: two columns, label left, value right
     add(".dbi-port .attrs{display:grid;grid-template-columns:1fr 1fr;")
-    add("gap:5px 12px;padding-top:10px;border-top:1px solid " .. C.rule .. ";}")
+    add("gap:5px 12px;padding-top:10px;border-top:1px solid " .. panel.C.rule .. ";}")
     add(".dbi-port .attr{display:flex;align-items:baseline;justify-content:space-between;gap:6px;}")
     add(".dbi-port .attr .k{font-size:" .. barSize() .. "px;letter-spacing:0.12em;")
-    add("text-transform:uppercase;color:" .. C.ink_dim .. ";}")
-    add(".dbi-port .attr .v{font-size:" .. bodySize() .. "px;color:" .. C.ink .. ";")
+    add("text-transform:uppercase;color:" .. panel.C.ink_dim .. ";}")
+    add(".dbi-port .attr .v{font-size:" .. bodySize() .. "px;color:" .. panel.C.ink .. ";")
     add("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
 
         -- status pills
     add(".dbi-port .pills{display:flex;flex-wrap:wrap;gap:5px;padding-top:10px;")
-    add("border-top:1px solid " .. C.rule .. ";}")
+    add("border-top:1px solid " .. panel.C.rule .. ";}")
     add(".dbi-port .pill{font-size:" .. barSize() .. "px;font-weight:600;letter-spacing:0.1em;")
     add("text-transform:uppercase;padding:2px 6px;border-radius:3px;")
-    add("border:1px solid rgba(0,172,243,0.4);color:" .. C.ki .. ";background:rgba(0,172,243,0.1);}")
-    add(".dbi-port .pill.good{border-color:rgba(94,201,102,0.4);color:" .. C.stam .. ";")
+    add("border:1px solid rgba(0,172,243,0.4);color:" .. panel.C.ki .. ";background:rgba(0,172,243,0.1);}")
+    add(".dbi-port .pill.good{border-color:rgba(94,201,102,0.4);color:" .. panel.C.stam .. ";")
     add("background:rgba(94,201,102,0.1);}")
-    add(".dbi-port .pill.bad{border-color:rgba(234,60,63,0.4);color:" .. C.hp .. ";")
+    add(".dbi-port .pill.bad{border-color:rgba(234,60,63,0.4);color:" .. panel.C.hp .. ";")
     add("background:rgba(234,60,63,0.1);}")
 
         -- The opponent sits apart from your own vitals, and larger: this is the
@@ -2092,18 +2129,18 @@ local function css()
         -- figure. 'foeblk' rather than 'foe' -- the bar's own kind is already
         -- 'foe', and a wrapper sharing that name is how the power bar once
         -- inherited the power-level box's border and stopped looking like a bar.
-    add(".dbi-port .foeblk{padding-top:10px;border-top:1px solid " .. C.rule .. ";}")
+    add(".dbi-port .foeblk{padding-top:10px;border-top:1px solid " .. panel.C.rule .. ";}")
     add(".dbi-port .foeblk .trk{height:16px;}")
     add(".dbi-port .foeblk .mtl{font-size:" .. bodySize() .. "px;}")
-    add(".dbi-port .foeblk .mtl .num{font-weight:700;color:" .. C.foe .. ";}")
+    add(".dbi-port .foeblk .mtl .num{font-weight:700;color:" .. panel.C.foe .. ";}")
 
         -- sheet
     add(".dbi-port table{width:100%;table-layout:fixed;border-collapse:collapse;")
     add("font-size:" .. bodySize() .. "px;}")
     add(".dbi-port td{padding:1px 0;vertical-align:top;}")
-    add(".dbi-port td.k{width:40%;color:" .. C.ink_dim .. ";padding-right:10px;")
+    add(".dbi-port td.k{width:40%;color:" .. panel.C.ink_dim .. ";padding-right:10px;")
     add("overflow-wrap:anywhere;}")
-    add(".dbi-port td.v{text-align:right;color:" .. C.ink .. ";overflow-wrap:anywhere;}")
+    add(".dbi-port td.v{text-align:right;color:" .. panel.C.ink .. ";overflow-wrap:anywhere;}")
     add(".dbi-port table td{line-height:1.35;}")
     add(".dbi-port .cfg{gap:2px;}")
     add(".dbi-port .crow{display:flex;align-items:center;gap:6px;margin:0;")
@@ -2116,7 +2153,7 @@ local function css()
     add(".dbi-port .crow input{flex:1 1 auto;min-width:0;background:rgba(0,0,0,0.35);")
     add("border:1px solid rgba(255,255,255,0.18);border-radius:3px;color:inherit;")
     add("font:inherit;font-size:" .. barSize() .. "px;padding:2px 5px;outline:none;}")
-    add(".dbi-port .crow input:focus{border-color:" .. C.energy .. ";}")
+    add(".dbi-port .crow input:focus{border-color:" .. panel.C.energy .. ";}")
     -- The add-a-form row: three fields stacked, because the announcement is a
     -- whole sentence of the MUD's prose and will not share a line.
     add(".dbi-port .cfrm{display:flex;flex-direction:column;gap:4px;")
@@ -2125,21 +2162,21 @@ local function css()
     add(".dbi-port .cfrm input{background:rgba(0,0,0,0.35);")
     add("border:1px solid rgba(255,255,255,0.18);border-radius:3px;color:inherit;")
     add("font:inherit;font-size:" .. barSize() .. "px;padding:2px 5px;outline:none;}")
-    add(".dbi-port .cfrm input:focus{border-color:" .. C.energy .. ";}")
+    add(".dbi-port .cfrm input:focus{border-color:" .. panel.C.energy .. ";}")
     add(".dbi-port .cfrm .tb{align-self:flex-end;}")
     -- The stored announcement, whole. It is what the match runs against, so a
     -- truncated one on screen would hide the reason a form is not firing.
     add(".dbi-port .fpat{font-size:" .. math.max(8, barSize() - 1) .. "px;")
     add("opacity:0.55;line-height:1.25;margin:0 0 5px 6px;word-break:break-word;}")
-    add(".dbi-port .fon{color:" .. C.energy .. ";font-size:"
+    add(".dbi-port .fon{color:" .. panel.C.energy .. ";font-size:"
         .. math.max(8, barSize() - 1) .. "px;}")
     add(".dbi-port .sec{margin:10px 0 3px;font-size:" .. barSize() .. "px;font-weight:600;")
-    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. C.energy .. ";")
-    add("border-bottom:1px solid " .. C.rule .. ";padding-bottom:3px;}")
+    add("letter-spacing:0.2em;text-transform:uppercase;color:" .. panel.C.energy .. ";")
+    add("border-bottom:1px solid " .. panel.C.rule .. ";padding-bottom:3px;}")
 
     add(".dbi-port .idle{padding:14px 10px;font-size:" .. bodySize() .. "px;")
-    add("line-height:1.7;color:" .. C.ink_dim .. ";}")
-    add(".dbi-port .idle b{color:" .. C.energy .. ";}")
+    add("line-height:1.7;color:" .. panel.C.ink_dim .. ";}")
+    add(".dbi-port .idle b{color:" .. panel.C.energy .. ";}")
 
         -- Narrow: the numbers go, then the second attribute column. The enemy
         -- keeps its figure -- your own bars still show a percentage in .pc, but
@@ -2156,9 +2193,9 @@ end
 -- Colour follows how much is left, not what the bar measures: full is the
 -- meter's own colour, and everything below LV_WARN walks yellow, orange, red.
 local function levelOf(p)
-    if p <= LV.crit then return " crit" end
-    if p <= LV.low then return " low" end
-    if p <= LV.warn then return " warn" end
+    if p <= panel.LV.crit then return " crit" end
+    if p <= panel.LV.low then return " low" end
+    if p <= panel.LV.warn then return " warn" end
     return ""
 end
 
@@ -2273,7 +2310,7 @@ local function faceHtml()
     -- the store comes back as undefined, which is truthy, so 'or "Unknown"'
     -- never fires and the panel wrote the word across the portrait instead of
     -- a name. headerName() proves it is a real string first.
-    local shownName = headerName()
+    local shownName = profile.header()
     if shownName == "Portrait" then shownName = "Unknown" end
     add('<div class="nm">' .. escapeHtml(shownName) .. "</div>")
 
@@ -2290,7 +2327,7 @@ end
 -- Which tab is which. One table drives the strip and the click handler, so a
 -- name can never drift between them. 'portrait' stays the id for Stats because
 -- that is what 'view' has always been stored as.
-local TABS = {
+panel.TABS = {
     { id = "portrait", lg = "Stats",     sm = "Stat" },
     { id = "sheet",    lg = "Sheet",     sm = "Shet" },
     { id = "inv",      lg = "Inventory", sm = "Inv" },
@@ -2301,9 +2338,9 @@ local function tabStrip()
     local t = {}
     local function add(x) t[#t + 1] = x end
     add('<div class="tabs">')
-    for _, tab in ipairs(TABS) do
+    for _, tab in ipairs(panel.TABS) do
         local sel = ""
-        if view == tab.id then sel = " sel" end
+        if panel.view == tab.id then sel = " sel" end
         -- Both labels are emitted and CSS picks one on width. Asking the client
         -- how wide the panel is does not work (sharp edge 11), so the choice is
         -- made in the stylesheet with container query units.
@@ -2372,7 +2409,7 @@ local function portraitBody()
     -- without pl before the first score is exactly that state -- sharp edge 13
     -- applied to the guard but not to what it guards. With only one known, the
     -- single figure below says the one true thing instead.
-    if plMode == "nums" and has(base) and has(pl) then
+    if panel.plMode == "nums" and has(base) and has(pl) then
         add('<div class="pl nums" data-mud-action="plmode" title="switch power display">')
         add('<span class="cell"><span class="k">Base PL</span>')
         add('<span class="v">' .. escapeHtml(short(base)) .. "</span></span>")
@@ -2405,7 +2442,7 @@ local function portraitBody()
     if has(arCur) and not has(arMax) then arMax = arCur end
     add(barOrDash("Armor", arCur, arMax, "ar", false))
     -- the ratio bar is what the numeric mode replaces, so it goes with it
-    if plMode ~= "nums" and has(pl) and has(base) then
+    if panel.plMode ~= "nums" and has(pl) and has(base) then
         add(bar("Power", pl, base, "pw", false))
     end
 
@@ -2424,8 +2461,8 @@ local function portraitBody()
     if grid ~= "" then add('<div class="attrs">' .. grid .. "</div>") end
 
     local pills = {}
-    if formName ~= "" then
-        pills[#pills + 1] = '<span class="pill good">' .. escapeHtml(formName) .. "</span>"
+    if form.name ~= "" then
+        pills[#pills + 1] = '<span class="pill good">' .. escapeHtml(form.name) .. "</span>"
     end
     -- Fighting beats everything: the opponent bar is up, so whatever score
     -- said about sitting down is an hour out of date.
@@ -2484,7 +2521,7 @@ local cap = { kind = nil, armed = nil, at = 0, lines = {}, n = 0,
               silent = false, dirty = false, endNow = false, promptLine = nil,
               target = nil }
 
-local ITEM_MAX = 200
+gear.MAX = 200
 -- counters, so a capture that does not happen can say which half failed
 local capCmds = 0
 local capArms = 0
@@ -2506,22 +2543,26 @@ local uiCalls = 0
 -- Four releases were spent reasoning about which branch ran from the state it
 -- left behind, and the state does not say -- an item that ends up in neither
 -- list looks the same whether the rule missed, the drop failed, or the add did.
-local itemsTrace = false
+gear.trace = false
 local capStand = 0     -- stood down: the reply never came
 local capHead = 0      -- the block's header matched
 local capSaw = ""      -- the last line offered while armed
-local itemList = { inv = {}, eq = {}, cont = {} }
+gear.list = { inv = {}, eq = {}, cont = {} }
 -- Whether a list has ever been captured, which is not the same question as
 -- whether it has rows in it. An inventory emptied by dropping everything is
 -- known and empty; one that was never asked for is unknown. The events may only
 -- edit the first kind, and only the second kind is what 'type inv' is for.
-local itemSeen = { inv = false, eq = false, cont = false }
+gear.seen = { inv = false, eq = false, cont = false }
 -- What each container holds, and which ones are open, both keyed by the same
 -- keyword a command would address the container by. Per container rather than
 -- one slot: you have more than one bag and closing a backpack to peek in a
 -- pouch is not a UI.
-local contList = {}
-local contOpen = {}
+-- Containers and the analyse block: what is in one, which is open, whether a
+-- thing is a container at all, and the same pair for analyse.
+local cont = {}
+
+cont.list = {}
+cont.open = {}
 -- Which keywords have actually proven to be containers, by answering a 'look
 -- in' with a contents block. Guessing from a name does not work -- a Proof of
 -- Tranquility is not a bag and nothing about the text says so -- and offering
@@ -2529,13 +2570,13 @@ local contOpen = {}
 --
 -- Remembered across sessions: what is a container does not change, and asking
 -- again every login would mean typing 'look in' at your own backpack forever.
-local isCont = {}
+cont.is = {}
 -- What 'ana' said about an item, keyed the same way, and which ones are shown.
 -- The block names the item on its first line and carries the one thing nothing
 -- else does: the slot it is worn in.
-local anaOf = {}
-local anaOpen = {}
-local itemStale = { inv = true, eq = true, cont = true }
+cont.anaOf = {}
+cont.anaOpen = {}
+gear.stale = { inv = true, eq = true, cont = true }
 
 -- char.equipment and char.inventory, straight into the two lists.
 --
@@ -2592,21 +2633,21 @@ local function acceptGear(root)
     local got = false
     local eq = gearRows(root.equipment, true)
     if eq ~= nil then
-        itemList.eq = eq
-        itemSeen.eq = true
-        itemStale.eq = false
+        gear.list.eq = eq
+        gear.seen.eq = true
+        gear.stale.eq = false
         got = true
     end
     local inv = gearRows(root.inventory, false)
     if inv ~= nil then
-        itemList.inv = inv
-        itemSeen.inv = true
-        itemStale.inv = false
+        gear.list.inv = inv
+        gear.seen.inv = true
+        gear.stale.inv = false
         got = true
     end
     return got
 end
-local itemsGag = false
+gear.gag = false
 
 -- The word a MUD command can address this item by, and nothing else reaches
 -- send(). Letters and digits only: an item called 'sword;quit' or one carrying
@@ -2633,7 +2674,7 @@ local itemsGag = false
 -- The apostrophe is the part that matters, and it is excluded from all of them.
 --
 -- Words that are never the item.
-local ITEM_SKIP = {
+gear.SKIP = {
     a = true, an = true, the = true, of = true, with = true,
     ["and"] = true, some = true, pair = true,
 }
@@ -2669,7 +2710,7 @@ local function itemPhrase(name)
     for word in s:gmatch("%a+") do
         local low = word:lower()
         -- single letters are the 'N' in Raz'N'Lak, never a keyword
-        if not ITEM_SKIP[low] and #low > 1 then words[#words + 1] = low end
+        if not gear.SKIP[low] and #low > 1 then words[#words + 1] = low end
     end
     if #words == 0 then return "" end
     if #words == 1 then return words[1] end
@@ -2736,8 +2777,8 @@ local function finishCapture()
     end
 
     if cap.kind == "ana" and cap.n > 0 and cap.target then
-        anaOf[cap.target] = cap.lines
-        anaOpen[cap.target] = true
+        cont.anaOf[cap.target] = cap.lines
+        cont.anaOpen[cap.target] = true
         capDone = capDone + 1
         cap.dirty = true
         cap.kind = nil
@@ -2750,12 +2791,12 @@ local function finishCapture()
     end
 
     if cap.kind == "cont" and cap.n > 0 and cap.target then
-        contList[cap.target] = cap.lines
+        cont.list[cap.target] = cap.lines
         -- Deliberately NOT opening it here. Expanding a row is the open button's
         -- job and nothing else's, so a 'look in' you typed yourself fills the
         -- contents in and leaves the row as it found it. The button sets the
         -- flag before it sends, so its own reply still lands expanded.
-        isCont[cap.target] = true
+        cont.is[cap.target] = true
         capDone = capDone + 1
         cap.dirty = true
         cap.kind = nil
@@ -2768,9 +2809,9 @@ local function finishCapture()
     end
 
     if cap.kind and cap.n > 0 then
-        itemList[cap.kind] = cap.lines
-        itemStale[cap.kind] = false
-        itemSeen[cap.kind] = true
+        gear.list[cap.kind] = cap.lines
+        gear.stale[cap.kind] = false
+        gear.seen[cap.kind] = true
         capDone = capDone + 1
         cap.dirty = true
     end
@@ -2876,15 +2917,15 @@ local function feedItems(clean)
         if type(rest) == "string" then
             local bare = rest:lower()
             if bare == "" or bare == "nothing" or bare == "nothing." then
-                return itemsGag == true or cap.silent == true
+                return gear.gag == true or cap.silent == true
             end
         end
     end
 
     cap.n = cap.n + 1
     cap.lines[cap.n] = row
-    if cap.n >= ITEM_MAX then finishCapture() end
-    return itemsGag == true or cap.silent == true
+    if cap.n >= gear.MAX then finishCapture() end
+    return gear.gag == true or cap.silent == true
 end
 
 -- Keep the lists current without asking the MUD anything.
@@ -2940,7 +2981,7 @@ local function rowCount(rows)
 end
 
 local function listDrop(kind, name)
-    local rows = itemList[kind]
+    local rows = gear.list[kind]
     if type(rows) ~= "table" or name == "" then return false end
     local want = itemPhrase(name)
     if want == "" then return false end
@@ -2954,7 +2995,7 @@ local function listDrop(kind, name)
 end
 
 local function listAdd(kind, name)
-    local rows = itemList[kind]
+    local rows = gear.list[kind]
     if type(rows) ~= "table" or name == "" then return false end
     -- Never invent a list: adding to one that was never captured would put a
     -- single row up and claim that is everything you own.
@@ -2964,7 +3005,7 @@ local function listAdd(kind, name)
     -- alone was stricter than the rule it is there to enforce -- it dropped
     -- items out of both lists in both directions, silently, on 0.31.0.
     local n = rowCount(rows)
-    if n == 0 and not itemSeen[kind] then return false end
+    if n == 0 and not gear.seen[kind] then return false end
     rows[n + 1] = name
     return true
 end
@@ -3007,7 +3048,7 @@ local function feedItemEvent(clean)
         -- and out of the bag it came from, so an open contents list stays right
         local fromWhat = capOf(clean, "^You get .+ from (.+)%.$")
         local inside = nil
-        if fromWhat ~= nil then inside = contList[itemPhrase(fromWhat)] end
+        if fromWhat ~= nil then inside = cont.list[itemPhrase(fromWhat)] end
         if type(inside) == "table" then
             local want = itemPhrase(got)
             for i, row in ipairs(inside) do
@@ -3035,7 +3076,7 @@ local function feedItemEvent(clean)
         -- and into the bag, so an open contents list gains it
         local intoWhat = capOf(clean, "^You put .+ in (.+)%.$")
         local bag = nil
-        if intoWhat ~= nil then bag = contList[itemPhrase(intoWhat)] end
+        if intoWhat ~= nil then bag = cont.list[itemPhrase(intoWhat)] end
         if type(bag) == "table" then bag[rowCount(bag) + 1] = putIn end
         return true
     end
@@ -3069,7 +3110,7 @@ local function feedItemEvent(clean)
         if s ~= nil then slot = s:lower() end
         ev.hit = ev.hit + 1
         local intoEq = listAdd("eq", "<" .. slot .. ">  " .. worn)
-        if not intoEq then itemStale.eq = true end
+        if not intoEq then gear.stale.eq = true end
         ev.why = "wore [" .. worn .. "] slot [" .. slot .. "] into eq="
             .. tostring(intoEq)
         return true
@@ -3084,7 +3125,7 @@ local function feedItemEvent(clean)
         ev.hit = ev.hit + 1
         local outInv = listDrop("inv", name)
         local intoEq = listAdd("eq", "<" .. slot .. ">  " .. name)
-        if not intoEq then itemStale.eq = true end
+        if not intoEq then gear.stale.eq = true end
         ev.why = slot .. " [" .. tostring(name) .. "] out of inv="
             .. tostring(outInv) .. " into eq=" .. tostring(intoEq)
         return true
@@ -3095,8 +3136,8 @@ local function feedItemEvent(clean)
         ev.hit = ev.hit + 1
         local outEq = listDrop("eq", doffed)
         local intoInv = listAdd("inv", doffed)
-        if not outEq then itemStale.eq = true end
-        if not intoInv then itemStale.inv = true end
+        if not outEq then gear.stale.eq = true end
+        if not intoInv then gear.stale.inv = true end
         ev.why = "removed [" .. doffed .. "] out of eq=" .. tostring(outEq)
             .. " into inv=" .. tostring(intoInv)
         return true
@@ -3188,8 +3229,8 @@ local function itemsBody(kind)
     local t = {}
     local function add(x) t[#t + 1] = x end
 
-    local rows = itemList[kind]
-    if type(rows) ~= "table" or (rowCount(rows) == 0 and not itemSeen[kind]) then
+    local rows = gear.list[kind]
+    if type(rows) ~= "table" or (rowCount(rows) == 0 and not gear.seen[kind]) then
         local what = "inv"
         if kind == "eq" then what = "eq" end
         if kind == "cont" then what = "look in <container>" end
@@ -3205,7 +3246,7 @@ local function itemsBody(kind)
         add('<div class="ihead"><span class="ib" data-mud-action="itref"')
         add(' data-mud-data="' .. ask .. '">refresh</span></div>')
     end
-    if itemStale[kind] then
+    if gear.stale[kind] then
         add('<div class="stale">this may be out of date</div>')
     end
 
@@ -3244,19 +3285,19 @@ local function itemsBody(kind)
                 -- the ordinal, so two bags of the same name share no state.
                 -- what 'ana' knows, if it has been asked
                 local imark = "info"
-                if anaOpen[key] then imark = "hide" end
+                if cont.anaOpen[key] then imark = "hide" end
                 act = act .. '<span class="ib" data-mud-action="itana" data-mud-data="'
                     .. escapeHtml(target) .. '">' .. imark .. "</span>"
 
-                if isCont[key] then
+                if cont.is[key] then
                     local mark = "open"
-                    if contOpen[key] then mark = "close" end
+                    if cont.open[key] then mark = "close" end
                     act = act
                         .. '<span class="ib" data-mud-action="itlook" data-mud-data="'
                         .. escapeHtml(target) .. '">' .. mark .. "</span>"
                     -- only while it is open: closed, there is nothing on show
                     -- to be out of date
-                    if contOpen[key] then
+                    if cont.open[key] then
                         act = act .. '<span class="ib" data-mud-action="itref"'
                             .. ' data-mud-data="cont~' .. escapeHtml(target)
                             .. '">refresh</span>'
@@ -3291,8 +3332,8 @@ local function itemsBody(kind)
 
             -- What 'ana' said, in place. Blank lines and the stat block are
             -- kept as they came: it is reference text, not a list.
-            if anaOpen[key] and type(anaOf[key]) == "table" then
-                for _, ln in ipairs(anaOf[key]) do
+            if cont.anaOpen[key] and type(cont.anaOf[key]) == "table" then
+                for _, ln in ipairs(cont.anaOf[key]) do
                     local t2 = trimBoth(tostring(ln or ""))
                     if t2 ~= "" then
                         add('<div class="isub">' .. escapeHtml(t2) .. "</div>")
@@ -3302,8 +3343,8 @@ local function itemsBody(kind)
 
             -- What is inside, in place, indented under it. Only for a container
             -- that has been opened and looked in.
-            if contOpen[key] and type(contList[key]) == "table" then
-                local inside = contList[key]
+            if cont.open[key] and type(cont.list[key]) == "table" then
+                local inside = cont.list[key]
                 if rowCount(inside) == 0 then
                     add('<div class="isub iempty">empty</div>')
                 end
@@ -3356,7 +3397,7 @@ local function cfgBody()
     -- which is exactly why they are typeable.
     add('<div class="sec">prompt formats</div>')
     for _, which in ipairs({ "prompt", "fprompt" }) do
-        local now = learnedFor[which]
+        local now = pr.learnedFor[which]
         if type(now) ~= "string" or now == "" then now = "(stock)" end
         add('<div class="crow"><span class="ck">' .. which .. "</span>")
         add('<span class="cv">' .. escapeHtml(now) .. "</span></div>")
@@ -3376,10 +3417,10 @@ local function cfgBody()
         .. onoff(gag.on) .. "</span></div>")
     add('<div class="crow"><span class="ck">hide captured lists</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="itemsgag">'
-        .. onoff(itemsGag) .. "</span></div>")
+        .. onoff(gear.gag) .. "</span></div>")
     add('<div class="crow"><span class="ck">power level</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="plmode">'
-        .. plMode .. "</span></div>")
+        .. panel.plMode .. "</span></div>")
     add('<div class="sec">where the numbers come from</div>')
     add('<div class="crow"><span class="ck">armor + enemy</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="src">'
@@ -3396,12 +3437,12 @@ local function cfgBody()
 
     add('<div class="crow"><span class="ck">text size</span>')
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font-">-</span>')
-    add('<span class="cv">' .. math.floor(font.scale * 100 + 0.5) .. "%</span>")
+    add('<span class="cv">' .. math.floor(panel.font.scale * 100 + 0.5) .. "%</span>")
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font+">+</span></div>')
 
     add('<div class="crow"><span class="ck">opacity</span>')
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="alpha-">-</span>')
-    add('<span class="cv">' .. math.floor(panelAlpha * 100 + 0.5) .. "%</span>")
+    add('<span class="cv">' .. math.floor(panel.alpha * 100 + 0.5) .. "%</span>")
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="alpha+">+</span></div>')
 
     add('<div class="sec">this character</div>')
@@ -3415,7 +3456,7 @@ local function cfgBody()
     add('<span class="tb" data-mud-action="setav">set</span>')
     add('<span class="tb" data-mud-action="clearav">clear</span></form>')
 
-    local shownNm = nameOverride
+    local shownNm = profile.override
     if shownNm == "" then shownNm = "(from score)" end
     add('<div class="crow"><span class="ck">name</span>')
     add('<span class="cv">' .. escapeHtml(shownNm) .. "</span></div>")
@@ -3432,8 +3473,8 @@ local function cfgBody()
     add('<div class="sec">transformations</div>')
 
     local sorted = {}
-    for fname in pairs(FORMS) do
-        if type(FORMS[fname]) == "table" then sorted[#sorted + 1] = fname end
+    for fname in pairs(form.ALL) do
+        if type(form.ALL[fname]) == "table" then sorted[#sorted + 1] = fname end
     end
     table.sort(sorted)
 
@@ -3443,9 +3484,9 @@ local function cfgBody()
     end
 
     for _, fname in ipairs(sorted) do
-        local frec = FORMS[fname]
+        local frec = form.ALL[fname]
         local fmark = ""
-        if fname == formName then fmark = ' <span class="fon">active</span>' end
+        if fname == form.name then fmark = ' <span class="fon">active</span>' end
         local shown = frec.url
         if shown == "base" then shown = "(clears the portrait)" end
 
@@ -3467,9 +3508,9 @@ local function cfgBody()
         .. escapeHtml(edit.fpat) .. '">')
     add('<span class="tb" data-mud-action="addform">add form</span></form>')
 
-    if formName ~= "" then
+    if form.name ~= "" then
         add('<div class="crow"><span class="ck">wearing <b>'
-            .. escapeHtml(formName) .. "</b></span>")
+            .. escapeHtml(form.name) .. "</b></span>")
         add('<span class="tb" data-mud-action="formbase">back to base</span></div>')
     end
 
@@ -3482,7 +3523,7 @@ local function cfgBody()
 end
 
 local function sheetBody()
-    if not scoreSeen then
+    if not sheet.seen then
         return '<div class="idle">no score read yet<br><br>type <b>score</b> and it fills in</div>'
     end
 
@@ -3547,7 +3588,7 @@ end
 --
 -- Assigned, not declared with 'function headerName()' -- a forward-declared
 -- local plus a function declaration is an illegal shadow once transpiled.
-headerName = function()
+profile.header = function()
     -- Whitelisted on the way OUT as well as on the way in. has() rejects the
     -- literal string "undefined", but it decides on type(v), and a value that
     -- crosses the boundary as JS undefined is not something to trust a single
@@ -3555,7 +3596,7 @@ headerName = function()
     -- the winner is proved to be a real, non-empty string before it is
     -- returned, and anything else falls through to the plugin's own name.
     local pick = nil
-    if has(nameOverride) then pick = nameOverride
+    if has(profile.override) then pick = profile.override
     elseif has(sc.first) then pick = sc.first
     elseif has(sc.name) then pick = sc.name end
     if type(pick) ~= "string" or pick == "" or pick == "undefined" then
@@ -3584,7 +3625,7 @@ local function footBar()
 end
 
 local function render()
-    if not widget then return end
+    if not panel.id then return end
     readTerminalFont()
 
     -- Asking the MUD is a button on every tab, and only a button. Nothing here
@@ -3593,13 +3634,13 @@ local function render()
         .. ' data-mud-data="score">refresh</span></div>'
 
     local inner = ""
-    if view == "cfg" then
+    if panel.view == "cfg" then
         inner = cfgBody()
-    elseif view == "sheet" then
+    elseif panel.view == "sheet" then
         inner = '<div class="pad">' .. ask .. sheetBody() .. "</div>"
-    elseif view == "inv" or view == "eq" then
-        inner = itemsBody(view)
-    elseif scoreSeen or vit then
+    elseif panel.view == "inv" or panel.view == "eq" then
+        inner = itemsBody(panel.view)
+    elseif sheet.seen or vit then
         inner = '<div class="pad">' .. ask .. "</div>" .. portraitBody()
     else
         inner = '<div class="pad">' .. ask .. "</div>"
@@ -3607,13 +3648,13 @@ local function render()
             .. "type <b>score</b>, or press refresh above</div>"
     end
 
-    setWidgetProperty(widget, "content", css()
+    setWidgetProperty(panel.id, "content", css()
         .. '<div class="dbi-port">'
         -- First name only. It shares this row with the buttons, and the full
         -- form was being cut off mid-word -- 'Arashi The' rather than a name.
         -- A name override is shown whole; the player chose its length.
         .. '<div class="bar"><span class="ttl">'
-        .. escapeHtml(headerName()) .. "</span>"
+        .. escapeHtml(profile.header()) .. "</span>"
         .. '<span class="dot"></span><span class="sp"></span>'
         .. '<span class="tb" data-mud-action="cfg" title="settings">&#9881;</span>'
         .. '<span class="tb" data-mud-action="close">hide</span></div>'
@@ -3636,7 +3677,7 @@ end
 -- there are no live numbers on it to go stale. Anything the user did passes
 -- force.
 local function safeRender(force)
-    if view == "cfg" and not force then return end
+    if panel.view == "cfg" and not force then return end
     local ok, err = pcall(render)
     if not ok then
         lastError = tostring(err)
@@ -3761,8 +3802,8 @@ local function snapshot()
         at = os.time(),
         sc = sc,
         avatarUrl = avatarUrl,
-        nameOverride = nameOverride,
-        forms = FORMS,
+        nameOverride = profile.override,
+        forms = form.ALL,
         -- The last numbers seen, so the panel comes up populated rather than
         -- showing four dashes until the first packet lands. The opponent is
         -- deliberately NOT among them: a stale enemy bar at login is a lie,
@@ -3775,7 +3816,7 @@ local function snapshot()
         -- What you were carrying and wearing. Per character, obviously, and the
         -- container scratch list is left out: it is whichever bag was looked in
         -- last, which means nothing next session.
-        items = { inv = itemList.inv, eq = itemList.eq },
+        items = { inv = gear.list.inv, eq = gear.list.eq },
     }
 end
 
@@ -3795,7 +3836,7 @@ local function restoreItems(prof)
         if type(t) ~= "table" then return out end
         local i = 1
         if type(t[0]) == "string" then i = 0 end
-        while type(t[i]) == "string" and #out < ITEM_MAX do
+        while type(t[i]) == "string" and #out < gear.MAX do
             local s = trimBoth(t[i])
             if s ~= "" then out[#out + 1] = s end
             i = i + 1
@@ -3807,19 +3848,19 @@ local function restoreItems(prof)
     if type(prof) == "table" then it = prof.items end
     if type(it) ~= "table" then it = {} end
 
-    itemList.inv = rowsOf(it.inv)
-    itemList.eq = rowsOf(it.eq)
-    itemList.cont = {}
+    gear.list.inv = rowsOf(it.inv)
+    gear.list.eq = rowsOf(it.eq)
+    gear.list.cont = {}
 
     -- Restored rows count as captured -- the events may edit them, and the tab
     -- must not tell you to type 'inv' for a list it is already showing. They are
     -- also from a previous session, so they come back flagged out of date.
-    itemSeen.inv = rowCount(itemList.inv) > 0
-    itemSeen.eq = rowCount(itemList.eq) > 0
-    itemSeen.cont = false
-    itemStale.inv = true
-    itemStale.eq = true
-    itemStale.cont = true
+    gear.seen.inv = rowCount(gear.list.inv) > 0
+    gear.seen.eq = rowCount(gear.list.eq) > 0
+    gear.seen.cont = false
+    gear.stale.inv = true
+    gear.stale.eq = true
+    gear.stale.cont = true
 end
 
 -- Guarded, and it says so when it fails. Every caller does something the user
@@ -3839,7 +3880,7 @@ end
 local numSave = { at = 0, every = 300 }
 
 local function saveSettings()
-    profiles[profileKey] = snapshot()
+    profile.all[profile.key] = snapshot()
     -- Whitelisted, not 'or 0'. numSave has no 'n' until this line runs once,
     -- and a missing key on a PLAIN LUA TABLE reads back as undefined here --
     -- which is truthy, so 'numSave.n or 0' handed back undefined rather than
@@ -3879,30 +3920,30 @@ local function saveSettings()
                 -- for the life of the store. Dropping it in memory was not
                 -- enough on its own: this merge read it straight back off the
                 -- disk and put it there again.
-                local mine = (k == "" and profileKey ~= "")
+                local mine = (k == "" and profile.key ~= "")
 
                 -- ...and except a character we are already holding under
                 -- another spelling. Keeping those would undo the case fold on
                 -- every save, and 'Solao' would grow back beside 'solao'
                 -- forever.
-                for k2 in pairs(profiles) do
+                for k2 in pairs(profile.all) do
                     if type(k2) == "string" and k2:lower() == k:lower() then mine = true end
                 end
                 if not mine then keep[k] = v end
             end
         end
     end
-    for k, v in pairs(profiles) do
+    for k, v in pairs(profile.all) do
         -- Same rule on this side. Whether the nameless profile is still in
         -- memory depends on which path got us here, and one guard at the point
         -- of writing beats three that have to agree.
         if type(k) == "string" and type(v) == "table"
-            and not (k == "" and profileKey ~= "") then
+            and not (k == "" and profile.key ~= "") then
             keep[k] = v
         end
     end
 
-    local lastOut = profileKey
+    local lastOut = profile.key
     if lastOut == "" and type(disk) == "table" and has(disk.last) then
         lastOut = disk.last
     end
@@ -3935,22 +3976,22 @@ local function saveSettings()
             -- Written on every save and remembered here, so 'dbchar storecheck'
             -- can tell a write that LANDED from one that merely did not throw.
             stamp = numSave.stamp,
-            view = view,
-            plMode = plMode,
-            fontScale = tostring(font.scale),
+            view = panel.view,
+            plMode = panel.plMode,
+            fontScale = tostring(panel.font.scale),
             gagPrompt = gag.on and "yes" or "no",
-            itemsGag = itemsGag and "yes" or "no",
+            itemsGag = gear.gag and "yes" or "no",
             srcMode = src.bars,
             srcStats = src.stats,
             srcItems = src.items,
             srcAuc = src.auc,
-            containers = isCont,
-            panelAlpha = tostring(panelAlpha),
+            containers = cont.is,
+            panelAlpha = tostring(panel.alpha),
             profiles = keep,
             last = lastOut,
-            prompts = prompt.learned,
-            promptFmt = learnedFor.prompt,
-            fpromptFmt = learnedFor.fprompt,
+            prompts = pr.cur.learned,
+            promptFmt = pr.learnedFor.prompt,
+            fpromptFmt = pr.learnedFor.fprompt,
         }
         saveTable("dbi-portrait-prefs", payload, "global")
         saveTable("dbi-portrait-prefs-bak", payload, "global")
@@ -4026,7 +4067,7 @@ end
 -- two cannot disagree about how many there are.
 local function formCountNow()
     local n = 0
-    for _, f in pairs(FORMS) do
+    for _, f in pairs(form.ALL) do
         if type(f) == "table" then n = n + 1 end
     end
     return n
@@ -4062,17 +4103,17 @@ end
 
 -- A score naming somebody else. Stash what is on screen under the character it
 -- belongs to, then put that character's own things on.
-useProfile = function(name)
+profile.use = function(name)
     -- Lowercased. The key comes off a parsed score header, and a key that can
     -- vary in case forks a second, empty profile for the same character.
     local key = trimBoth(name or ""):lower()
-    if key == "" or key == profileKey then return end
+    if key == "" or key == profile.key then return end
 
-    local oldKey = profileKey
-    profiles[oldKey] = snapshot()
+    local oldKey = profile.key
+    profile.all[oldKey] = snapshot()
 
-    profileKey = key
-    local prof = profiles[key]
+    profile.key = key
+    local prof = profile.all[key]
 
     -- Adopt an existing profile whatever case its key was stored under, and
     -- drop the stale spelling so it cannot fork again.
@@ -4081,19 +4122,19 @@ useProfile = function(name)
         -- standing here, so the stale spelling went back to the store and the
         -- next launch had two profiles for one character to choose between.
         local best = nil
-        for k, v in pairs(profiles) do
+        for k, v in pairs(profile.all) do
             if type(k) == "string" and k:lower() == key and type(v) == "table" then
                 if best == nil or profileWeight(v) > profileWeight(best) then best = v end
             end
         end
         if type(best) == "table" then
             local kept = {}
-            for k, v in pairs(profiles) do
+            for k, v in pairs(profile.all) do
                 if type(k) == "string" and type(v) == "table"
                     and k:lower() ~= key then kept[k] = v end
             end
             kept[key] = best
-            profiles = kept
+            profile.all = kept
             prof = best
         end
     end
@@ -4102,8 +4143,8 @@ useProfile = function(name)
     -- one field at a time; a missing one must not take the others with it
     if type(prof.avatarUrl) == "string" then avatarUrl = safeAvatarUrl(prof.avatarUrl)
     else avatarUrl = "" end
-    if type(prof.nameOverride) == "string" then nameOverride = prof.nameOverride else nameOverride = "" end
-    FORMS = formsFrom(prof.forms)
+    if type(prof.nameOverride) == "string" then profile.override = prof.nameOverride else profile.override = "" end
+    form.ALL = formsFrom(prof.forms)
 
     -- The sheet has to be rebound too, and this is the one that was missed.
     -- snapshot() stores a REFERENCE to the live table, so leaving sc pointing at
@@ -4119,7 +4160,7 @@ useProfile = function(name)
     -- list captured moments ago belongs to them and is fresher than anything
     -- stored. A real alt switch has an oldKey to prove it is one.
     local keepLive = oldKey == ""
-        and (rowCount(itemList.inv) > 0 or rowCount(itemList.eq) > 0)
+        and (rowCount(gear.list.inv) > 0 or rowCount(gear.list.eq) > 0)
     if not keepLive then restoreItems(prof) end
 
     -- Anything set before the first score of a session lived under the
@@ -4131,25 +4172,25 @@ useProfile = function(name)
     -- One field at a time, again: a stored profile with an avatar but no name
     -- override must not lose the anonymous name override.
     if oldKey == "" then
-        local anon = profiles[""]
+        local anon = profile.all[""]
         if type(anon) == "table" then
             if avatarUrl == "" and type(anon.avatarUrl) == "string" then
                 avatarUrl = safeAvatarUrl(anon.avatarUrl)
             end
-            if nameOverride == "" and type(anon.nameOverride) == "string" then
-                nameOverride = anon.nameOverride
+            if profile.override == "" and type(anon.nameOverride) == "string" then
+                profile.override = anon.nameOverride
             end
             local haveForms = false
-            for _ in pairs(FORMS) do haveForms = true end
-            if not haveForms then FORMS = formsFrom(anon.forms) end
+            for _ in pairs(form.ALL) do haveForms = true end
+            if not haveForms then form.ALL = formsFrom(anon.forms) end
         end
-        profiles[""] = nil
+        profile.all[""] = nil
     end
 
     -- whoever just walked in is standing in their base form, whatever the last
     -- character was wearing
-    formUrl = ""
-    formName = ""
+    form.url = ""
+    form.name = ""
     saveSettings()
 end
 
@@ -4181,16 +4222,16 @@ local function applyGag()
     -- Safe to arm all of them only because each pattern is anchored at both
     -- ends: someone pasting their prompt at you sits mid-line inside a tell and
     -- cannot match.
-    if type(prompt.set) == "table" then
-        for _, m in ipairs(prompt.set) do
-            if type(m.rx) == "string" and #m.rx <= PAT_MAX then
+    if type(pr.cur.set) == "table" then
+        for _, m in ipairs(pr.cur.set) do
+            if type(m.rx) == "string" and #m.rx <= pr.MAX then
                 local id = addTrigger(m.rx, nil,
                     { type = "regex", omitFromOutput = true, priority = 90 })
                 if id then gag.ids[#gag.ids + 1] = id end
             end
         end
     end
-    gag.sig = prompt.sig
+    gag.sig = pr.cur.sig
 
     -- The original test as well, always, not only when nothing compiled. A
     -- player whose prompt no format describes still gets gagged, and seeing one
@@ -4208,7 +4249,7 @@ local function applyGag()
     --
     -- and gagging that took a row nothing parses straight out of the scroll,
     -- invisibly, because gagging never reaches onLine.
-    gag.tag = prompt.tag
+    gag.tag = pr.cur.tag
     if gag.tag ~= "" then
         local id = addTrigger(gag.tag .. ".*[Kk][Ii]:", nil,
             { type = "regex", omitFromOutput = true, priority = 90 })
@@ -4263,7 +4304,7 @@ local function promptFeed(m, captures, line)
     for n, role in ipairs(m.roles) do
         if role then
             local slot = capFirst + n - 1
-            if PROMPT_TEXT[role] then
+            if pr.TEXT[role] then
                 local word = captures[slot]
                 if type(word) == "string" then
                     -- Trimmed, because the capture is greedy now: a token at the
@@ -4380,16 +4421,16 @@ local function promptFeed(m, captures, line)
     safeRender()
 end
 
-armPrompt = function()
-    for _, id in ipairs(prompt.trigIds) do
+pr.arm = function()
+    for _, id in ipairs(pr.cur.trigIds) do
         pcall(function() removeTrigger(id) end)
     end
-    prompt.trigIds = {}
-    if not prompt.set then promptRebuild() end
-    if type(prompt.set) ~= "table" then return end
+    pr.cur.trigIds = {}
+    if not pr.cur.set then promptRebuild() end
+    if type(pr.cur.set) ~= "table" then return end
 
-    for _, m in ipairs(prompt.set) do
-        if type(m.rx) == "string" and #m.rx <= PAT_MAX then
+    for _, m in ipairs(pr.cur.set) do
+        if type(m.rx) == "string" and #m.rx <= pr.MAX then
             local mine = m
             -- No omitFromOutput here, deliberately, whatever the gag setting
             -- is. A trigger given BOTH a callback and omitFromOutput did
@@ -4400,20 +4441,20 @@ armPrompt = function()
             local id = addTrigger(m.rx, function(captures, line)
                 promptFeed(mine, captures, line)
             end, { type = "regex", priority = 90 })
-            if id then prompt.trigIds[#prompt.trigIds + 1] = id end
+            if id then pr.cur.trigIds[#pr.cur.trigIds + 1] = id end
         end
     end
 end
 
 local function applyAlpha()
-    if not widget then return end
+    if not panel.id then return end
     pcall(function()
-        setWidgetAppearance(widget, { backgroundOpacity = panelAlpha })
+        setWidgetAppearance(panel.id, { backgroundOpacity = panel.alpha })
     end)
 end
 
 local function makeWidget()
-    widget = createWidget({
+    panel.id = createWidget({
         type     = "html",
         name     = "portrait",
         title    = "Portrait",
@@ -4421,18 +4462,18 @@ local function makeWidget()
         size     = { width = 240, height = 420 },
         appearance = { showTitleBar = false, autoHideSettingsCog = true },
     })
-    setWidgetAppearance(widget, {
-        backgroundColor   = C.panel_bg,
-        backgroundOpacity = panelAlpha,
-        borderColor       = C.energy,
+    setWidgetAppearance(panel.id, {
+        backgroundColor   = panel.C.panel_bg,
+        backgroundOpacity = panel.alpha,
+        borderColor       = panel.C.energy,
         borderWidth       = 2,
         borderRadius      = 10,
-        borderGradient    = "linear-gradient(135deg," .. C.energy .. ",#8a4400 60%,#2a1400)",
+        borderGradient    = "linear-gradient(135deg," .. panel.C.energy .. ",#8a4400 60%,#2a1400)",
         borderShadow      = "0 0 22px -4px rgba(251,124,0,0.45)",
     })
 
     -- registerWidgetEvent appends, so a reload would stack a second handler
-    pcall(function() unregisterWidgetEvent(widget, "action") end)
+    pcall(function() unregisterWidgetEvent(panel.id, "action") end)
 
     -- Named, so the registration below can wrap it. Nothing in here was
     -- guarded, and a throw in any branch went nowhere at all: no message, no
@@ -4451,9 +4492,9 @@ local function makeWidget()
             -- client and an unknown value would leave the body rendering
             -- nothing at all.
             local want = tostring(data.data or "")
-            for _, tab in ipairs(TABS) do
-                if tab.id == want and view ~= want then
-                    view = want
+            for _, tab in ipairs(panel.TABS) do
+                if tab.id == want and panel.view ~= want then
+                    panel.view = want
                     -- Draw first. Remembering which tab you were on is worth
                     -- having and worth nothing next to actually showing it.
                     safeRender(true)
@@ -4466,8 +4507,8 @@ local function makeWidget()
         elseif act == "cfg" then
             -- A toggle: the gear both opens and leaves. Clicking a tab leaves
             -- too, so there is no way to be stuck in here.
-            local leaving = (view == "cfg")
-            if leaving then view = "portrait" else view = "cfg" end
+            local leaving = (panel.view == "cfg")
+            if leaving then panel.view = "portrait" else panel.view = "cfg" end
             safeRender(true)
             saveSettings()
             -- On the way out, say so. Every control here already writes on the
@@ -4478,9 +4519,9 @@ local function makeWidget()
                 -- Named, because the store is per character and a settings
                 -- screen that saved under a key you did not expect looks
                 -- exactly like one that did not save at all.
-                local who = profileKey
+                local who = profile.key
                 if who == "" then who = "this session (no score read yet)" end
-                echo(TAG .. "settings saved for " .. who .. ".", C.energy)
+                echo(TAG .. "settings saved for " .. who .. ".", panel.C.energy)
             end
 
 
@@ -4494,18 +4535,18 @@ local function makeWidget()
             local phrase = actPhrase(data.data)
             local key = phrase
             if key ~= "" then
-                if contOpen[key] then
-                    contOpen[key] = false
+                if cont.open[key] then
+                    cont.open[key] = false
                     safeRender(true)
-                elseif type(contList[key]) == "table" then
-                    contOpen[key] = true          -- already know what is in it
+                elseif type(cont.list[key]) == "table" then
+                    cont.open[key] = true          -- already know what is in it
                     safeRender(true)
                 else
                     -- Mark it open first, then ask. The render needs both the
                     -- flag and a contents list, so nothing shows until the reply
                     -- lands -- and a 'look in' typed rather than clicked never
                     -- sets the flag, so it stays collapsed.
-                    contOpen[key] = true
+                    cont.open[key] = true
                     pcall(function() send('look in "' .. phrase .. '"') end)
                 end
             end
@@ -4514,11 +4555,11 @@ local function makeWidget()
             local phrase = actPhrase(data.data)
             local key = phrase
             if key ~= "" then
-                if anaOpen[key] then
-                    anaOpen[key] = false
+                if cont.anaOpen[key] then
+                    cont.anaOpen[key] = false
                     safeRender(true)
-                elseif type(anaOf[key]) == "table" then
-                    anaOpen[key] = true
+                elseif type(cont.anaOf[key]) == "table" then
+                    cont.anaOpen[key] = true
                     safeRender(true)
                 else
                     pcall(function() send('ana "' .. phrase .. '"') end)
@@ -4583,7 +4624,7 @@ local function makeWidget()
             local txt = trimBoth(edit[which] or "")
             if txt == "" then
                 echo(TAG .. "type the format first -- the %-tokens, as you set "
-                    .. "them on the MUD.", C.energy)
+                    .. "them on the MUD.", panel.C.energy)
             elseif promptCompile(txt) == nil then
                 echo(TAG .. "that does not compile as a prompt format. It needs "
                     .. "at least one %-token.", "#ff6666")
@@ -4593,10 +4634,10 @@ local function makeWidget()
                 -- format the panel has to match against.
                 local bare = txt:gsub("&.", ""):gsub("%^.", ""):gsub("%}.", "")
                 bare = trimBoth(bare)
-                learnedFor[which] = bare
+                pr.learnedFor[which] = bare
                 promptLearn(bare, true)
                 edit[which] = ""
-                echo(TAG .. which .. " set to: " .. txt, C.energy)
+                echo(TAG .. which .. " set to: " .. txt, panel.C.energy)
                 safeRender(true)
                 saveSettings()
             end
@@ -4608,16 +4649,16 @@ local function makeWidget()
             local which = arg
             if which ~= "prompt" and which ~= "fprompt" then which = "prompt" end
             pcall(function() send(which) end)
-            echo(TAG .. "asked the MUD for your " .. which .. ".", C.energy)
+            echo(TAG .. "asked the MUD for your " .. which .. ".", panel.C.energy)
 
         elseif act == "cfgtog" then
             if arg == "gag" then
                 gag.on = not gag.on
                 applyGag()
             elseif arg == "itemsgag" then
-                itemsGag = not itemsGag
+                gear.gag = not gear.gag
             elseif arg == "plmode" then
-                if plMode == "nums" then plMode = "bar" else plMode = "nums" end
+                if panel.plMode == "nums" then panel.plMode = "bar" else panel.plMode = "nums" end
             elseif arg == "src" then
                 if src.bars == "prompt" then src.bars = "gmcp" else src.bars = "prompt" end
             elseif arg == "srcstats" then
@@ -4631,10 +4672,10 @@ local function makeWidget()
             saveSettings()
 
         elseif act == "cfgnudge" then
-            if arg == "font-" then font.scale = math.max(0.5, font.scale - 0.1) end
-            if arg == "font+" then font.scale = math.min(2, font.scale + 0.1) end
-            if arg == "alpha-" then panelAlpha = math.max(0, panelAlpha - 0.05) end
-            if arg == "alpha+" then panelAlpha = math.min(1, panelAlpha + 0.05) end
+            if arg == "font-" then panel.font.scale = math.max(0.5, panel.font.scale - 0.1) end
+            if arg == "font+" then panel.font.scale = math.min(2, panel.font.scale + 0.1) end
+            if arg == "alpha-" then panel.alpha = math.max(0, panel.alpha - 0.05) end
+            if arg == "alpha+" then panel.alpha = math.min(1, panel.alpha + 0.05) end
             applyAlpha()
             safeRender(true)
             saveSettings()
@@ -4647,7 +4688,7 @@ local function makeWidget()
                 echo(TAG .. "a form needs a name, an image url (or 'base'), and "
                     .. "the line the MUD prints.", "#ff6666")
             elseif furl == "base" then
-                FORMS[fnm] = { pat = fpat, url = "base" }
+                form.ALL[fnm] = { pat = fpat, url = "base" }
                 edit.fname, edit.furl, edit.fpat = "", "", ""
                 safeRender(true)
                 saveSettings()
@@ -4655,7 +4696,7 @@ local function makeWidget()
                 -- Through the same resolver the avatar uses. A share page is
                 -- markup, not a picture, and lands as an empty frame.
                 applyImage(furl, function(clean)
-                    FORMS[fnm] = { pat = fpat, url = clean }
+                    form.ALL[fnm] = { pat = fpat, url = clean }
                     edit.fname, edit.furl, edit.fpat = "", "", ""
                     safeRender(true)
                     saveSettings()
@@ -4666,20 +4707,20 @@ local function makeWidget()
             -- Rebuilt, not deleted. Setting the key to nil leaves it standing
             -- in this runtime, and pairs() goes on yielding it (sharp edge 3b).
             local kept = {}
-            for fnm, frec in pairs(FORMS) do
+            for fnm, frec in pairs(form.ALL) do
                 if fnm ~= arg and type(frec) == "table" then kept[fnm] = frec end
             end
-            FORMS = kept
-            if formName == arg then
-                formName = ""
-                formUrl = ""
+            form.ALL = kept
+            if form.name == arg then
+                form.name = ""
+                form.url = ""
             end
             safeRender(true)
             saveSettings()
 
         elseif act == "formbase" then
-            formName = ""
-            formUrl = ""
+            form.name = ""
+            form.url = ""
             safeRender(true)
 
         elseif act == "setav" then
@@ -4704,24 +4745,24 @@ local function makeWidget()
         elseif act == "setnm" then
             local nm = trimBoth(edit.name or "")
             if nm ~= "" then
-                nameOverride = nm
+                profile.override = nm
                 edit.name = ""
                 safeRender(true)
                 saveSettings()
             end
 
         elseif act == "clearnm" then
-            nameOverride = ""
+            profile.override = ""
             edit.name = ""
             safeRender(true)
             saveSettings()
 
         elseif act == "plmode" then
-            if plMode == "nums" then plMode = "bar" else plMode = "nums" end
+            if panel.plMode == "nums" then panel.plMode = "bar" else panel.plMode = "nums" end
             safeRender(true)
             saveSettings()
         elseif act == "close" then
-            hideWidget(widget)
+            hideWidget(panel.id)
         end
     end
 
@@ -4732,8 +4773,8 @@ local function makeWidget()
                      cfgavatar = "avatar", cfgname = "name",
                      cfgfname = "fname", cfgfurl = "furl", cfgfpat = "fpat" }
 
-    pcall(function() unregisterWidgetEvent(widget, "keyup") end)
-    registerWidgetEvent(widget, "keyup", function(e)
+    pcall(function() unregisterWidgetEvent(panel.id, "keyup") end)
+    registerWidgetEvent(panel.id, "keyup", function(e)
         if type(e) ~= "table" then return end
         local which = FIELDS[tostring(e.targetId or "")]
         if which and type(e.targetValue) == "string" then edit[which] = e.targetValue end
@@ -4746,8 +4787,8 @@ local function makeWidget()
                       fname = { "addform", "" }, furl = { "addform", "" },
                       fpat = { "addform", "" } }
 
-    pcall(function() unregisterWidgetEvent(widget, "submit") end)
-    registerWidgetEvent(widget, "submit", function(e)
+    pcall(function() unregisterWidgetEvent(panel.id, "submit") end)
+    registerWidgetEvent(panel.id, "submit", function(e)
         if type(e) ~= "table" then return end
         local id = tostring(e.targetId or "")
         local which = FIELDS[id]
@@ -4770,7 +4811,7 @@ local function makeWidget()
         pcall(onAction, { action = act, data = arg })
     end)
 
-    registerWidgetEvent(widget, "action", function(data)
+    registerWidgetEvent(panel.id, "action", function(data)
         uiCalls = uiCalls + 1
         local ok, err = pcall(onAction, data)
         if not ok then
@@ -4794,8 +4835,8 @@ local function printDiag()
         .. " char.vitals present=" .. tostring(type(getGMCPData("char.vitals")) == "table"))
     print(TAG .. "connected=" .. tostring(nego.connected)
         .. " vitalsSeen=" .. tostring(vit ~= nil)
-        .. " scoreSeen=" .. tostring(scoreSeen)
-        .. " parsing=" .. tostring(inScore))
+        .. " scoreSeen=" .. tostring(sheet.seen)
+        .. " parsing=" .. tostring(sheet.inBlock))
     if vit then
         print(TAG .. "vitals hit=" .. tostring(vit.hit) .. "/" .. tostring(vit.maxHit)
             .. " energy=" .. tostring(vit.energy) .. "/" .. tostring(vit.maxEnergy)
@@ -4808,30 +4849,30 @@ local function printDiag()
     print(TAG .. "last STRENGTH line: [" .. tostring(pd.scoreSaw) .. "]")
     local foeAge = "-"
     if foe.val then foeAge = tostring(math.floor(os.clock() - foe.at)) end
-    print(TAG .. "plMode=" .. plMode .. " foe=" .. tostring(foe.val) .. " foeAge=" .. foeAge
+    print(TAG .. "plMode=" .. panel.plMode .. " foe=" .. tostring(foe.val) .. " foeAge=" .. foeAge
         .. " src=" .. src.bars .. "/" .. src.stats .. "/" .. src.items
         .. "/" .. src.auc)
     print(TAG .. "last opponent line: [" .. tostring(foe.saw) .. "]")
     print(TAG .. "read off it: " .. tostring(foe.got)
         .. "  held at clock " .. tostring(foe.at))
     print(TAG .. "opponent last cleared by: " .. tostring(foe.why))
-    print(TAG .. "fontScale=" .. font.scale .. " gagPrompt=" .. tostring(gag.on)
+    print(TAG .. "fontScale=" .. panel.font.scale .. " gagPrompt=" .. tostring(gag.on)
         .. " feedCalls=" .. tostring(feedCalls)
         .. " esc=[" .. tostring(promptRx("(a|b)")) .. "]"
         .. " capFirst=" .. tostring(capFirst)
-        .. " promptTrigs=" .. tostring(#prompt.trigIds)
-        .. " compiled=" .. tostring(prompt.set and #prompt.set or -1)
+        .. " promptTrigs=" .. tostring(#pr.cur.trigIds)
+        .. " compiled=" .. tostring(pr.cur.set and #pr.cur.set or -1)
         .. " luaTries=" .. tostring(pd.tries)
         .. " luaHits=" .. tostring(pd.hits)
         .. " buildErr=" .. tostring(pd.buildErr or "none")
         .. " readErr=" .. tostring(pd.readErr or "none")
         .. " gagTriggers=" .. tostring(#gag.ids)
-        .. " formatsArmed=" .. tostring(#prompt.order)
-        .. " learned=" .. tostring(#prompt.learned)
-        .. " promptTag=" .. prompt.tag .. " gagTag=" .. (gag.tag ~= "" and gag.tag or "(none)"))
+        .. " formatsArmed=" .. tostring(#pr.cur.order)
+        .. " learned=" .. tostring(#pr.cur.learned)
+        .. " promptTag=" .. pr.cur.tag .. " gagTag=" .. (gag.tag ~= "" and gag.tag or "(none)"))
 
     local formCount = 0
-    for _ in pairs(FORMS) do formCount = formCount + 1 end
+    for _ in pairs(form.ALL) do formCount = formCount + 1 end
     -- Everything the prompt has handed over, whatever it happened to carry.
     -- Sorted so two runs can be diffed against each other.
     local fieldNames = {}
@@ -4852,35 +4893,35 @@ local function printDiag()
     -- did; printing it costs three lines.
     -- Grouped by the format they came from, so the two stock prompts read as
     -- two prompts rather than as sixteen loose regexes.
-    print(TAG .. "learned prompt  = " .. tostring(learnedFor.prompt or "(stock)"))
-    print(TAG .. "learned fprompt = " .. tostring(learnedFor.fprompt or "(stock)"))
+    print(TAG .. "learned prompt  = " .. tostring(pr.learnedFor.prompt or "(stock)"))
+    print(TAG .. "learned fprompt = " .. tostring(pr.learnedFor.fprompt or "(stock)"))
     local nInv, nEq, nCont = 0, 0, 0
-    for _ in ipairs(itemList.inv or {}) do nInv = nInv + 1 end
-    for _ in ipairs(itemList.eq or {}) do nEq = nEq + 1 end
-    for _ in ipairs(itemList.cont or {}) do nCont = nCont + 1 end
+    for _ in ipairs(gear.list.inv or {}) do nInv = nInv + 1 end
+    for _ in ipairs(gear.list.eq or {}) do nEq = nEq + 1 end
+    for _ in ipairs(gear.list.cont or {}) do nCont = nCont + 1 end
     print(TAG .. "items cmds=" .. capCmds .. " armed=" .. capArms
         .. " captured=" .. capDone
         .. " kind=" .. tostring(cap.kind) .. " waiting=" .. tostring(cap.armed)
         .. " inv=" .. nInv .. " eq=" .. nEq .. " cont=" .. nCont
-        .. " gag=" .. tostring(itemsGag) .. " clock=" .. tostring(os.clock()))
+        .. " gag=" .. tostring(gear.gag) .. " clock=" .. tostring(os.clock()))
     print(TAG .. "item events: seen=" .. ev.seen .. " acted=" .. ev.hit
         .. "  last 'You ' line: [" .. tostring(ev.last) .. "]")
     print(TAG .. "last item move: " .. tostring(ev.why))
     print(TAG .. "widget clicks handled=" .. uiCalls)
-    print(TAG .. "lists captured: inv=" .. tostring(itemSeen.inv)
-        .. " eq=" .. tostring(itemSeen.eq) .. " cont=" .. tostring(itemSeen.cont))
+    print(TAG .. "lists captured: inv=" .. tostring(gear.seen.inv)
+        .. " eq=" .. tostring(gear.seen.eq) .. " cont=" .. tostring(gear.seen.cont))
     print(TAG .. "items stood-down=" .. capStand .. " header-hits=" .. capHead
         .. "  last line while armed: [" .. tostring(capSaw) .. "]")
 
     print(TAG .. "Prompt Triggers")
-    if type(prompt.set) ~= "table" or #prompt.set == 0 then
+    if type(pr.cur.set) ~= "table" or #pr.cur.set == 0 then
         print("   (none compiled)")
     else
         -- promptSet is ordered longest-pattern-first because that is what
         -- matching needs. Reading it wants format order and then line order, so
         -- the display sorts its own copy.
         local shownList = {}
-        for _, m in ipairs(prompt.set) do shownList[#shownList + 1] = m end
+        for _, m in ipairs(pr.cur.set) do shownList[#shownList + 1] = m end
         table.sort(shownList, function(l, r)
             if l.fmt ~= r.fmt then return tostring(l.fmt) < tostring(r.fmt) end
             return (l.lineNo or 0) < (r.lineNo or 0)
@@ -4894,7 +4935,7 @@ local function printDiag()
             end
             local mark = ""
             if gag.on then mark = "  [gagging]" end
-            if prompt.used[m.rx] then mark = mark .. " [seen]" end
+            if pr.cur.used[m.rx] then mark = mark .. " [seen]" end
             print("     Line " .. tostring(m.lineNo)
                 .. "   hits=" .. tostring(m.hits or 0) .. mark)
             print("       " .. tostring(m.rx))
@@ -4907,21 +4948,21 @@ local function printDiag()
     pcall(function() onDisk = loadTable("dbi-portrait-prefs", "global") end)
     local dn = "unreadable"
     if type(onDisk) == "table" then
-        local mine = (onDisk.profiles or {})[profileKey]
+        local mine = (onDisk.profiles or {})[profile.key]
         local fn = 0
         if type(mine) == "table" then
             for _ in pairs(mine.forms or {}) do fn = fn + 1 end
         end
         dn = tostring(fn)
     end
-    print(TAG .. "stored forms for [" .. profileKey .. "]=" .. dn
+    print(TAG .. "stored forms for [" .. profile.key .. "]=" .. dn
         .. "  (in memory=" .. formCountNow() .. ")")
     print(TAG .. "forms=" .. formCount .. " activeForm="
-        .. (formName ~= "" and formName or "base"))
+        .. (form.name ~= "" and form.name or "base"))
 
     -- the URL actually written into the stylesheet, so a wrong avatar is a
     -- question about the file rather than about the plugin
-    local shown = formUrl
+    local shown = form.url
     if shown == "" then shown = avatarUrl end
     if shown == "" then
         local r, x = slug(sc.race), slug(sc.sex)
@@ -4931,8 +4972,8 @@ local function printDiag()
     end
     print(TAG .. "avatar url=" .. shown)
     print(TAG .. "override=" .. (avatarUrl ~= "" and avatarUrl or "(none)")
-        .. " view=" .. view .. " helloStamp=" .. tostring(getVariable(HELLO.key, "global"))
-        .. " profile=[" .. profileKey .. "]"
+        .. " view=" .. panel.view .. " helloStamp=" .. tostring(getVariable(HELLO.key, "global"))
+        .. " profile=[" .. profile.key .. "]"
         .. " gmcpOwnedElsewhere=" .. tostring(gmcpOwned))
     print(TAG .. "lastError=" .. lastError)
 end
@@ -4975,27 +5016,27 @@ local function charCommand(args)
     local low = cmd:lower()
 
     if low == "show" then
-        showWidget(widget)
+        showWidget(panel.id)
         safeRender(true)
     elseif low == "hide" then
-        hideWidget(widget)
+        hideWidget(panel.id)
     elseif low == "items gag on" or low == "items gag off" then
-        itemsGag = (low == "items gag on")
+        gear.gag = (low == "items gag on")
         saveSettings()
-        if itemsGag then
+        if gear.gag then
             echo(TAG .. "captured lists are hidden from the main window; the "
-                .. "tabs still fill in.", C.energy)
+                .. "tabs still fill in.", panel.C.energy)
         else
-            echo(TAG .. "captured lists show in the main window as usual.", C.energy)
+            echo(TAG .. "captured lists show in the main window as usual.", panel.C.energy)
         end
 
     elseif low == "items trace on" or low == "items trace off" then
-        itemsTrace = (low == "items trace on")
-        if itemsTrace then
+        gear.trace = (low == "items trace on")
+        if gear.trace then
             echo(TAG .. "every 'You ' line will say what the item reader made "
-                .. "of it. 'dbchar items trace off' when you have seen enough.", C.energy)
+                .. "of it. 'dbchar items trace off' when you have seen enough.", panel.C.energy)
         else
-            echo(TAG .. "item reader is quiet again.", C.energy)
+            echo(TAG .. "item reader is quiet again.", panel.C.energy)
         end
 
     elseif low == "items list" then
@@ -5004,7 +5045,7 @@ local function charCommand(args)
         -- tell you what is actually in a row -- whether the empty-slot filter
         -- caught this MUD's wording, or where an added row landed.
         for _, kind in ipairs({ "inv", "eq", "cont" }) do
-            local rows = itemList[kind]
+            local rows = gear.list[kind]
             local n = 0
             if type(rows) == "table" then
                 for i, row in ipairs(rows) do
@@ -5014,10 +5055,10 @@ local function charCommand(args)
             end
             if n == 0 then print(TAG .. kind .. ": empty") end
         end
-        print(TAG .. "captured: inv=" .. tostring(itemSeen.inv)
-            .. " eq=" .. tostring(itemSeen.eq))
+        print(TAG .. "captured: inv=" .. tostring(gear.seen.inv)
+            .. " eq=" .. tostring(gear.seen.eq))
         print(TAG .. "last move: " .. tostring(ev.why))
-        for key, rows in pairs(contList) do
+        for key, rows in pairs(cont.list) do
             if type(rows) == "table" then
                 for i, row in ipairs(rows) do
                     print(TAG .. "in " .. tostring(key) .. " " .. i
@@ -5027,30 +5068,30 @@ local function charCommand(args)
         end
 
     elseif low == "items clear" then
-        itemList = { inv = {}, eq = {}, cont = {} }
-        itemStale = { inv = true, eq = true, cont = true }
-        itemSeen = { inv = false, eq = false, cont = false }
+        gear.list = { inv = {}, eq = {}, cont = {} }
+        gear.stale = { inv = true, eq = true, cont = true }
+        gear.seen = { inv = false, eq = false, cont = false }
         -- What each bag holds goes with them, and every bag closes. Which items
         -- ARE containers is kept: that was learned, not captured, and it is the
         -- one thing here worth remembering.
-        for k in pairs(contList) do contList[k] = nil end
-        for k in pairs(contOpen) do contOpen[k] = nil end
+        for k in pairs(cont.list) do cont.list[k] = nil end
+        for k in pairs(cont.open) do cont.open[k] = nil end
         -- and what 'ana' said about each item, which was surviving a clear and
         -- then answering the next click out of a stale reading
-        for k in pairs(anaOf) do anaOf[k] = nil end
-        for k in pairs(anaOpen) do anaOpen[k] = nil end
+        for k in pairs(cont.anaOf) do cont.anaOf[k] = nil end
+        for k in pairs(cont.anaOpen) do cont.anaOpen[k] = nil end
         safeRender(true)
-        echo(TAG .. "captured lists dropped.", C.energy)
+        echo(TAG .. "captured lists dropped.", panel.C.energy)
 
     elseif low:sub(1, 7) == "avatar " then
         local url = trimBoth(cmd:sub(8))
         if url == "clear" then
             avatarUrl = ""
-            echo(TAG .. "back to the race avatar.", C.energy)
+            echo(TAG .. "back to the race avatar.", panel.C.energy)
         else
             applyImage(url, function(clean)
                 avatarUrl = clean
-                echo(TAG .. "avatar set: " .. clean, C.energy)
+                echo(TAG .. "avatar set: " .. clean, panel.C.energy)
                 saveSettings()
                 safeRender(true)
             end)
@@ -5064,71 +5105,71 @@ local function charCommand(args)
             echo(TAG .. "opacity takes 0-100.", "#ff6666")
             return
         end
-        panelAlpha = math.floor(n) / 100
+        panel.alpha = math.floor(n) / 100
         saveSettings()
         applyAlpha()
         safeRender(true)
     elseif low:sub(1, 5) == "name " then
         local n = trimBoth(cmd:sub(6))
         if n == "clear" then
-            nameOverride = ""
-            echo(TAG .. "name back to what score reports.", C.energy)
+            profile.override = ""
+            echo(TAG .. "name back to what score reports.", panel.C.energy)
         else
-            nameOverride = n
+            profile.override = n
             sc.name = n
-            echo(TAG .. "name set to " .. n .. ".", C.energy)
+            echo(TAG .. "name set to " .. n .. ".", panel.C.energy)
         end
         saveSettings()
         safeRender(true)
 
     elseif low == "pl" then
-        if plMode == "nums" then plMode = "bar" else plMode = "nums" end
+        if panel.plMode == "nums" then panel.plMode = "bar" else panel.plMode = "nums" end
         saveSettings()
         safeRender(true)
-        echo(TAG .. "power display: " .. plMode, C.energy)
+        echo(TAG .. "power display: " .. panel.plMode, panel.C.energy)
     elseif low:sub(1, 5) == "font " then
         local spec = trimBoth(low:sub(6))
         if spec == "+" then
-            font.scale = math.min(2, font.scale + 0.1)
+            panel.font.scale = math.min(2, panel.font.scale + 0.1)
         elseif spec == "-" then
-            font.scale = math.max(0.5, font.scale - 0.1)
+            panel.font.scale = math.max(0.5, panel.font.scale - 0.1)
         else
             local n = safeNum(spec)
             if not n or n < 50 or n > 200 then
                 echo(TAG .. "font takes +, - or a percent 50-200.", "#ff6666")
                 return
             end
-            font.scale = n / 100
+            panel.font.scale = n / 100
         end
         -- one decimal, so the +/- steps land on clean values
-        font.scale = math.floor(font.scale * 10 + 0.5) / 10
+        panel.font.scale = math.floor(panel.font.scale * 10 + 0.5) / 10
         saveSettings()
         safeRender(true)
-        echo(TAG .. "font " .. math.floor(font.scale * 100 + 0.5) .. "%", C.energy)
+        echo(TAG .. "font " .. math.floor(panel.font.scale * 100 + 0.5) .. "%", panel.C.energy)
     elseif low == "gag on" or low == "gag off" then
         gag.on = (low == "gag on")
         saveSettings()
         applyGag()
-        armPrompt()
+        pr.arm()
         if gag.on then
-            echo(TAG .. "hiding prompt lines matching '" .. prompt.tag
-                .. "' from the main window.", C.energy)
+            echo(TAG .. "hiding prompt lines matching '" .. pr.cur.tag
+                .. "' from the main window.", panel.C.energy)
         else
-            echo(TAG .. "the prompt line shows in the main window.", C.energy)
+            echo(TAG .. "the prompt line shows in the main window.", panel.C.energy)
         end
 
     elseif low == "forms" then
         local n = 0
-        for name, f in pairs(FORMS) do
+        for name, f in pairs(form.ALL) do
             n = n + 1
             local marker = ""
-            if name == formName then marker = "   <- active" end
-            echo(TAG .. name .. "  " .. f.url .. marker, C.energy)
-            echo("           when a line contains: " .. f.pat, C.ink_dim)
+            if name == form.name then marker = "   <- active" end
+            echo(TAG .. name .. "  " .. f.url .. marker, panel.C.energy)
+            echo("           when a line contains: " .. f.pat, panel.C.ink_dim)
         end
         if n == 0 then
-            echo(TAG .. "no forms yet. Add one on the settings screen (the gear),", C.energy)
-            echo("           or: dbchar form <name> <url|base> <message>", C.energy)
+            echo(TAG .. "no forms yet. Add one on the settings screen (the gear),", panel.C.energy)
+            echo("           or: dbchar form <name> <url|base> <message>", panel.C.energy)
         end
 
     elseif low:sub(1, 5) == "form " then
@@ -5155,20 +5196,20 @@ local function charCommand(args)
         -- into a CSS url(), and a share page put there fetches markup and draws
         -- nothing at all.
         if url == "base" then
-            FORMS[key] = { pat = said, url = "base" }
+            form.ALL[key] = { pat = said, url = "base" }
             saveSettings()
             safeRender(true)
             echo(TAG .. "form " .. key .. " set to base. It clears the portrait "
-                .. "when a line contains: " .. said, C.energy)
+                .. "when a line contains: " .. said, panel.C.energy)
             return
         end
 
         applyImage(url, function(clean)
-            FORMS[key] = { pat = said, url = clean }
+            form.ALL[key] = { pat = said, url = clean }
             saveSettings()
             safeRender(true)
-            echo(TAG .. "form " .. key .. " set: " .. clean, C.energy)
-            echo(TAG .. "it shows when a line contains: " .. said, C.energy)
+            echo(TAG .. "form " .. key .. " set: " .. clean, panel.C.energy)
+            echo(TAG .. "it shows when a line contains: " .. said, panel.C.energy)
         end)
 
     elseif low == "formfix" then
@@ -5179,59 +5220,59 @@ local function charCommand(args)
         -- and draws nothing. Re-asking each page for its image beats retyping
         -- five announcements a paragraph long.
         local todo = {}
-        for fnm, frec in pairs(FORMS) do
+        for fnm, frec in pairs(form.ALL) do
             if type(frec) == "table" and type(frec.url) == "string"
                 and frec.url ~= "base" and looksLikeImage(frec.url) == false then
                 todo[#todo + 1] = fnm
             end
         end
         if #todo == 0 then
-            echo(TAG .. "every form already points at an image file.", C.energy)
+            echo(TAG .. "every form already points at an image file.", panel.C.energy)
             return
         end
         echo(TAG .. #todo .. " form(s) point at a page rather than an image. "
-            .. "Asking each one...", C.energy)
+            .. "Asking each one...", panel.C.energy)
         for _, fnm in ipairs(todo) do
-            local frec = FORMS[fnm]
+            local frec = form.ALL[fnm]
             applyImage(frec.url, function(clean)
                 -- Read the record again: this lands after a round trip, and the
                 -- list may have been edited in between.
-                local now = FORMS[fnm]
+                local now = form.ALL[fnm]
                 if type(now) ~= "table" then return end
                 now.url = clean
                 saveSettings()
                 safeRender(true)
-                echo(TAG .. fnm .. " -> " .. clean, C.energy)
+                echo(TAG .. fnm .. " -> " .. clean, panel.C.energy)
             end)
         end
 
     elseif low:sub(1, 7) == "unform " then
         local name = trimBoth(low:sub(8))
-        if not FORMS[name] then
+        if not form.ALL[name] then
             echo(TAG .. "no form called " .. name .. ". 'dbchar forms' lists them.",
                 "#ff6666")
             return
         end
         -- Rebuilt rather than nil'd: sharp edge 3b leaves the key standing.
         local kept = {}
-        for fnm, frec in pairs(FORMS) do
+        for fnm, frec in pairs(form.ALL) do
             if fnm ~= name and type(frec) == "table" then kept[fnm] = frec end
         end
-        FORMS = kept
-        if formName == name then
-            formName = ""
-            formUrl = ""
+        form.ALL = kept
+        if form.name == name then
+            form.name = ""
+            form.url = ""
         end
         saveSettings()
         safeRender(true)
-        echo(TAG .. "form " .. name .. " removed.", C.energy)
+        echo(TAG .. "form " .. name .. " removed.", panel.C.energy)
 
     elseif low == "base" then
         -- manual reset, for a revert line that was missed or never set
-        formUrl = ""
-        formName = ""
+        form.url = ""
+        form.name = ""
         safeRender(true)
-        echo(TAG .. "back to the base portrait.", C.energy)
+        echo(TAG .. "back to the base portrait.", panel.C.energy)
 
     elseif low == "diag" then
         printDiag()
@@ -5256,13 +5297,13 @@ local function charCommand(args)
             else
                 local pc, fc = 0, 0
                 for _ in pairs(t.profiles or {}) do pc = pc + 1 end
-                local m = (t.profiles or {})[profileKey]
+                local m = (t.profiles or {})[profile.key]
                 if type(m) == "table" then
                     for _ in pairs(m.forms or {}) do fc = fc + 1 end
                 end
                 echo(TAG .. "before: " .. pair[1] .. " profiles=" .. pc
-                    .. " last=" .. tostring(t.last) .. " forms[" .. profileKey
-                    .. "]=" .. fc, C.energy)
+                    .. " last=" .. tostring(t.last) .. " forms[" .. profile.key
+                    .. "]=" .. fc, panel.C.energy)
             end
         end
 
@@ -5281,41 +5322,41 @@ local function charCommand(args)
             echo(TAG .. "The write is not landing. Everything below is the OLD "
                 .. "contents.", "#ff6666")
         else
-            echo(TAG .. "store ok -- the write came back byte for byte.", C.energy)
+            echo(TAG .. "store ok -- the write came back byte for byte.", panel.C.energy)
         end
 
         -- and what is actually in there, whichever way that went
         local pn, fn = 0, 0
         for _ in pairs(back.profiles or {}) do pn = pn + 1 end
-        local mine = (back.profiles or {})[profileKey]
+        local mine = (back.profiles or {})[profile.key]
         if type(mine) == "table" then
             for _ in pairs(mine.forms or {}) do fn = fn + 1 end
         end
-        echo(TAG .. "on disk: profiles=" .. pn .. " last=" .. tostring(back.last), C.energy)
-        echo(TAG .. "  for [" .. profileKey .. "]: forms=" .. fn
-            .. " avatar=" .. tostring(type(mine) == "table" and mine.avatarUrl or "-"), C.energy)
+        echo(TAG .. "on disk: profiles=" .. pn .. " last=" .. tostring(back.last), panel.C.energy)
+        echo(TAG .. "  for [" .. profile.key .. "]: forms=" .. fn
+            .. " avatar=" .. tostring(type(mine) == "table" and mine.avatarUrl or "-"), panel.C.energy)
         echo(TAG .. "in memory: forms=" .. tostring(formCountNow())
-            .. " avatar=" .. tostring(avatarUrl), C.energy)
+            .. " avatar=" .. tostring(avatarUrl), panel.C.energy)
 
     elseif low == "probe" then
         printProbe()
     else
-        echo(TAG .. "dbchar show | hide | pl", C.energy)
-        echo("          the tabs under the portrait pick the view", C.ink_dim)
-        echo("          the gear opens settings -- everything below is on it", C.ink_dim)
-        echo("          dbchar font +|-|<50-200>   text size (saved)", C.energy)
-        echo("          dbchar gag on|off          hide the prompt line", C.energy)
-        echo("          dbchar avatar <http(s) url>|clear", C.energy)
-        echo("          dbchar form <name> <url|base> <message>", C.energy)
-        echo("          dbchar forms | unform <name> | base", C.energy)
-        echo("          dbchar formfix             re-ask share pages for the image", C.energy)
-        echo("          dbchar name <name>|clear", C.energy)
-        echo("          dbchar items gag on|off      hide captured lists", C.energy)
-        echo("          dbchar items list            print the rows as stored", C.energy)
-        echo("          dbchar items trace on|off    say what each line did", C.energy)
-        echo("          dbchar items clear           forget them", C.energy)
-        echo("          dbchar storecheck          prove a write survives", C.energy)
-        echo("          dbchar opacity <0-100> | diag | probe", C.energy)
+        echo(TAG .. "dbchar show | hide | pl", panel.C.energy)
+        echo("          the tabs under the portrait pick the view", panel.C.ink_dim)
+        echo("          the gear opens settings -- everything below is on it", panel.C.ink_dim)
+        echo("          dbchar font +|-|<50-200>   text size (saved)", panel.C.energy)
+        echo("          dbchar gag on|off          hide the prompt line", panel.C.energy)
+        echo("          dbchar avatar <http(s) url>|clear", panel.C.energy)
+        echo("          dbchar form <name> <url|base> <message>", panel.C.energy)
+        echo("          dbchar forms | unform <name> | base", panel.C.energy)
+        echo("          dbchar formfix             re-ask share pages for the image", panel.C.energy)
+        echo("          dbchar name <name>|clear", panel.C.energy)
+        echo("          dbchar items gag on|off      hide captured lists", panel.C.energy)
+        echo("          dbchar items list            print the rows as stored", panel.C.energy)
+        echo("          dbchar items trace on|off    say what each line did", panel.C.energy)
+        echo("          dbchar items clear           forget them", panel.C.energy)
+        echo("          dbchar storecheck          prove a write survives", panel.C.energy)
+        echo("          dbchar opacity <0-100> | diag | probe", panel.C.energy)
     end
 end
 
@@ -5418,14 +5459,14 @@ function init()
 
     -- Restored before anything can read a prompt, so a returning session knows
     -- its own format on the first line rather than after seeing one.
-    prompt.learned = promptsFrom(p.prompts)
+    pr.cur.learned = promptsFrom(p.prompts)
     -- Revalidated the same way the list is: a stored string that no longer
     -- compiles is dropped rather than shown as if it were live.
     if type(p.promptFmt) == "string" and promptCompile(p.promptFmt) then
-        learnedFor.prompt = p.promptFmt
+        pr.learnedFor.prompt = p.promptFmt
     end
     if type(p.fpromptFmt) == "string" and promptCompile(p.fpromptFmt) then
-        learnedFor.fprompt = p.fpromptFmt
+        pr.learnedFor.fprompt = p.fpromptFmt
     end
     promptRebuild()
 
@@ -5433,23 +5474,23 @@ function init()
     if not has(v) then v = getVariable("view") end
     -- The tab comes back, the settings screen does not: booting into a config
     -- panel hides the character you logged in to look at.
-    for _, tb in ipairs(TABS) do
-        if v == tb.id then view = v end
+    for _, tb in ipairs(panel.TABS) do
+        if v == tb.id then panel.view = v end
     end
 
     local pm = p.plMode
     if not has(pm) then pm = getVariable("plMode") end
-    if pm == "nums" then plMode = "nums" end
+    if pm == "nums" then panel.plMode = "nums" end
 
     local fsc = safeNum(p.fontScale)
     if not fsc then fsc = safeNum(getVariable("fontScale")) end
-    if fsc and fsc >= 0.5 and fsc <= 2 then font.scale = fsc end
+    if fsc and fsc >= 0.5 and fsc <= 2 then panel.font.scale = fsc end
 
     local gp = p.gagPrompt
     if not has(gp) then gp = getVariable("gagPrompt") end
     if gp == "yes" then gag.on = true end
 
-    if p.itemsGag == "yes" then itemsGag = true end
+    if p.itemsGag == "yes" then gear.gag = true end
     if p.srcMode == "prompt" then src.bars = "prompt" end
     if p.srcStats == "score" then src.stats = "score" end
     if p.srcItems == "capture" then src.items = "capture" end
@@ -5463,27 +5504,27 @@ function init()
     if type(p.containers) == "table" then
         for k, v in pairs(p.containers) do
             if type(k) == "string" and v == true and k:match("^[%w ]+$") then
-                isCont[k] = true
+                cont.is[k] = true
             end
         end
     end
 
     local pa = safeNum(p.panelAlpha)
     if not pa then pa = safeNum(getVariable("panelAlpha")) end
-    if pa and pa >= 0 and pa <= 1 then panelAlpha = pa end
+    if pa and pa >= 0 and pa <= 1 then panel.alpha = pa end
 
-    if type(p.profiles) == "table" then profiles = p.profiles end
+    if type(p.profiles) == "table" then profile.all = p.profiles end
 
     -- Lowercased on the way in, because keys are lowercased now and a 'last'
     -- written by an older build still says 'Solao'. Without this the restore
     -- looks up a key that no longer exists and you come back to an empty panel
     -- with your own profile sitting right there unused.
-    if type(p.last) == "string" then profileKey = trimBoth(p.last):lower() end
+    if type(p.last) == "string" then profile.key = trimBoth(p.last):lower() end
 
     -- Same migration for the profiles themselves: fold any differently-cased
     -- key onto its lowercase spelling once, rather than leaving two.
     local folded = {}
-    for k, v in pairs(profiles) do
+    for k, v in pairs(profile.all) do
         if type(k) == "string" and type(v) == "table" then
             local lk = k:lower()
             -- The fuller one wins. This used to keep whichever pairs() yielded
@@ -5494,17 +5535,17 @@ function init()
             end
         end
     end
-    profiles = folded
+    profile.all = folded
 
     -- Whoever was on last. If 'last' names nothing -- an empty string from a
     -- session that never read a score, or a key whose profile did not survive
     -- -- fall back to the fullest profile in the store rather than coming up
     -- blank with the settings sitting right there unused. A launch should never
     -- show less than the last one did.
-    local prof = profiles[profileKey]
+    local prof = profile.all[profile.key]
     if profileWeight(prof) <= 0 then
         local bestKey, bestAt = nil, -1
-        for k, v in pairs(profiles) do
+        for k, v in pairs(profile.all) do
             if type(k) == "string" and k ~= "" then
                 local w = profileWeight(v)
                 if w > bestAt then
@@ -5514,15 +5555,15 @@ function init()
             end
         end
         if bestKey ~= nil and bestAt > 0 then
-            profileKey = bestKey
-            prof = profiles[bestKey]
+            profile.key = bestKey
+            prof = profile.all[bestKey]
         end
     end
     if type(prof) ~= "table" then prof = {} end
 
     if type(prof.sc) == "table" then
         sc = prof.sc
-        scoreSeen = true
+        sheet.seen = true
     end
 
     -- Last known, so the bars are drawn before anything arrives. Live data
@@ -5545,12 +5586,12 @@ function init()
     local no = prof.nameOverride
     if not has(no) then no = p.nameOverride end
     if not has(no) then no = getVariable("nameOverride") end
-    if type(no) == "string" then nameOverride = no end
+    if type(no) == "string" then profile.override = no end
 
     -- The forms belong to the character. The active one deliberately does not
     -- come back: a session starts in base form, and a portrait insisting you are
     -- still Super Saiyan from two days ago is worse than none.
-    FORMS = formsFrom(prof.forms)
+    form.ALL = formsFrom(prof.forms)
 
     restoreItems(prof)
 
@@ -5575,7 +5616,7 @@ function init()
     --
     -- An avatar, a name or a form is what a person put there. None of the
     -- three means there is nothing to lose by looking again.
-    if avatarUrl == "" and nameOverride == "" and formCountNow() == 0 then
+    if avatarUrl == "" and profile.override == "" and formCountNow() == 0 then
         -- Backed off rather than one shot at three seconds. The race is not
         -- rare -- it fired on the first restart after this shipped -- so the
         -- panel would sit blank for three seconds on most launches. First look
@@ -5588,7 +5629,7 @@ function init()
         local waits = { 250, 600, 1500, 3000, 6000 }
         local tryLate = nil
         tryLate = function(step)
-            if avatarUrl ~= "" or nameOverride ~= "" or formCountNow() > 0 then return end
+            if avatarUrl ~= "" or profile.override ~= "" or formCountNow() > 0 then return end
 
             -- BOTH stores, every time. The new one may hold a profile that is
             -- merely empty, and stopping there is what left the old one
@@ -5606,12 +5647,12 @@ function init()
                 if type(late) == "table" and type(late.profiles) == "table" then
                     local key = ""
                     if has(late.last) then key = trimBoth(tostring(late.last)):lower() end
-                    if key == "" and profileKey ~= "" then key = profileKey end
+                    if key == "" and profile.key ~= "" then key = profile.key end
                     local got = late.profiles[key]
                     if type(got) == "table" and profileWeight(got) > profileWeight(rec) then
                         rec, who = got, key
-                        if type(profiles) ~= "table" or rowCountOf(profiles) == 0 then
-                            profiles = late.profiles
+                        if type(profile.all) ~= "table" or rowCountOf(profile.all) == 0 then
+                            profile.all = late.profiles
                         end
                     end
                 end
@@ -5626,18 +5667,18 @@ function init()
                 return
             end
 
-            if who ~= "" then profileKey = who end
-            if type(profiles[profileKey]) ~= "table" then profiles[profileKey] = rec end
+            if who ~= "" then profile.key = who end
+            if type(profile.all[profile.key]) ~= "table" then profile.all[profile.key] = rec end
             if type(rec.avatarUrl) == "string" then avatarUrl = safeAvatarUrl(rec.avatarUrl) end
-            if type(rec.nameOverride) == "string" then nameOverride = rec.nameOverride end
-            FORMS = formsFrom(rec.forms)
+            if type(rec.nameOverride) == "string" then profile.override = rec.nameOverride end
+            form.ALL = formsFrom(rec.forms)
             if type(rec.sc) == "table" then sc = rec.sc end
             restoreItems(rec)
             safeRender(true)
             saveSettings()
-            echo(TAG .. "picked up " .. profileKey .. "'s settings "
+            echo(TAG .. "picked up " .. profile.key .. "'s settings "
                 .. tostring(waits[step]) .. "ms in ("
-                .. formCountNow() .. " form(s)).", C.energy)
+                .. formCountNow() .. " form(s)).", panel.C.energy)
         end
         pcall(function() addTimer(waits[1], function() tryLate(1) end) end)
     end
@@ -5648,7 +5689,7 @@ function init()
     -- dbchar command itself -- sits after this call, and losing dbchar means
     -- losing the only way to fix a bad stored value.
     pcall(applyGag)
-    pcall(armPrompt)
+    pcall(pr.arm)
 
     -- One handler for the tree. Whichever package fired, everything under it
     -- is re-read -- they arrive together and a partial refresh would leave the
@@ -5773,8 +5814,8 @@ function onConnect(sessionId)
     charState = {}
     posture = ""
     -- a fresh login stands in base form whatever was active before
-    formUrl = ""
-    formName = ""
+    form.url = ""
+    form.name = ""
     safeRender()
 end
 
@@ -5793,7 +5834,7 @@ function onLine(sessionId, rawLine, cleanLine)
         if feedAuction(clean) then cap.dirty = true end
         if not cap.kind then
             if feedItemEvent(clean) then cap.dirty = true end
-            if itemsTrace and clean:sub(1, 4) == "You " then
+            if gear.trace and clean:sub(1, 4) == "You " then
                 print(TAG .. "reader: " .. tostring(ev.why))
             end
         end
@@ -5805,8 +5846,8 @@ function onLine(sessionId, rawLine, cleanLine)
         -- The blank line a prompt format ending in '%Y' leaves behind. Only the
         -- one, and only straight after such a prompt.
         if clean == "" then
-            if gag.on and prompt.blank then drop = true end
-            prompt.blank = false
+            if gag.on and pr.cur.blank then drop = true end
+            pr.cur.blank = false
             return
         end
 
@@ -5823,7 +5864,7 @@ function onLine(sessionId, rawLine, cleanLine)
             local low = clean:lower()
             if low:find("default prompt", 1, true) then
                 echo(TAG .. "that is the stock prompt, which is already known.",
-                    C.energy)
+                    panel.C.energy)
             -- Plain find rather than the pattern '%%'. Not a fix: diag showed
             -- learned=4 with both formats captured, so the pattern form works.
             -- Kept because a plain find cannot be translated wrong, and this
@@ -5833,7 +5874,7 @@ function onLine(sessionId, rawLine, cleanLine)
                 -- this. Whatever was learned for that slot is not what is
                 -- running any more, so it goes rather than sitting there armed.
                 if ask.want then
-                    learnedFor[ask.want] = nil
+                    pr.learnedFor[ask.want] = nil
                     saveSettings()
                     echo(TAG .. "your " .. ask.want .. " has no fields in it; "
                         .. "nothing to read.", "#ffb02e")
@@ -5844,7 +5885,7 @@ function onLine(sessionId, rawLine, cleanLine)
                 -- whether or not the format turns out to be new -- promptLearn
                 -- returns false for one it already holds, and hanging both on
                 -- that return meant re-running 'prompt' recorded nothing.
-                if ask.want then learnedFor[ask.want] = clean end
+                if ask.want then pr.learnedFor[ask.want] = clean end
                 promptLearn(clean)
                 saveSettings()
             end
@@ -5885,7 +5926,7 @@ function onLine(sessionId, rawLine, cleanLine)
         -- The first prompt names the label this session uses. If the gag was
         -- turned on before that -- or armed against the other format -- re-arm
         -- it now that the MUD has said which one it is.
-        if gag.on and (gag.tag ~= prompt.tag or gag.sig ~= prompt.sig) then
+        if gag.on and (gag.tag ~= pr.cur.tag or gag.sig ~= pr.cur.sig) then
             applyGag()
         end
 
@@ -5893,7 +5934,7 @@ function onLine(sessionId, rawLine, cleanLine)
     end)
     if not ok then
         lastError = tostring(err)
-        inScore = false
+        sheet.inBlock = false
     end
     if drop then return false end
     return nil
@@ -5934,7 +5975,7 @@ function onSend(sessionId, text)
     -- 'prompt default' puts the stock one back, so whatever we had learned for
     -- that slot is no longer what the player is running.
     if rest:lower() == "default" then
-        learnedFor[which] = nil
+        pr.learnedFor[which] = nil
         saveSettings()
         return nil
     end
@@ -5949,7 +5990,7 @@ function onSend(sessionId, text)
         bare = bare:gsub("%}.", "")
         bare = trimBoth(bare)
         if bare ~= "" then
-            learnedFor[which] = bare
+            pr.learnedFor[which] = bare
             promptLearn(bare, true)
             saveSettings()
         end

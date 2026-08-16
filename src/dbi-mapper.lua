@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-mapper",
     name        = "DB Infinity Mapper",
-    version     = "0.82.0",
+    version     = "2026.08.16.000",
     author      = "Solao",
     description = "Builds MudForge's map from the room output, for a MUD with no GMCP room data.",
     settings    = { saveState = true },
@@ -36,7 +36,12 @@ local INSTANCE = tostring(os.time()) .. "-" .. tostring(math.random(100000, 9999
 
 -- Every spelling the MUD walks with, folded to one. The mapper API normalises
 -- long names itself, but the trail and the coordinates here do not.
-local CANON = {
+-- Directions, and the arithmetic on them: the canonical spellings, how far
+-- one step moves, the opposite of each, the step vectors, the walk-string
+-- letters and the long words. Six file-scope locals about one subject.
+local nav = {}
+
+nav.CANON = {
     n = "n", no = "n", nor = "n", north = "n",
     s = "s", so = "s", sou = "s", south = "s",
     e = "e", ea = "e", eas = "e", east = "e",
@@ -60,21 +65,21 @@ local CANON = {
 -- the distance is, so they never touch at any setting. That was a bug once:
 -- nodes sized for two while the rooms sat one apart, and the map drew as one
 -- solid block.
-local dist = { x = 1, y = 1 }
+nav.dist = { x = 1, y = 1 }
 
 local function distFor(axis)
-    return axis == "x" and dist.x or dist.y
+    return axis == "x" and nav.dist.x or nav.dist.y
 end
 
 -- The way back. Used to record the return leg of a step we just took, which
 -- the MUD confirms by listing that direction in the room we land in.
-local OPPOSITE = {
+nav.OPPOSITE = {
     n = "s", s = "n", e = "w", w = "e",
     ne = "sw", sw = "ne", nw = "se", se = "nw",
     u = "d", d = "u",
 }
 
-local STEP = {
+nav.STEP = {
     n  = {  0, -1,  0 },
     s  = {  0,  1,  0 },
     e  = {  1,  0,  0 },
@@ -217,23 +222,47 @@ local travels = {}
 local BLOCK = 10000
 local FIRST_BLOCK = 10000
 
-local hereVnum = nil
-local hereHash = ""
-local pendingCmd = nil        -- the last compass step typed, waiting for a room
-local pendingAt = 0
-local pendingTravel = nil     -- an explicit 'dbgo', armed for exactly one room
+-- Where we are and how we got here: the current vnum and its hash, the room
+-- we came from and the direction we came by, and whether the next room line
+-- should be expecting an exits line.
+--
+-- Not 'at' or 'here' -- both are locals elsewhere in this file, and a
+-- file-scope name a function shadows is one that function cannot reach.
+local whereAt = {}
 
--- A move nobody typed, holding why. Dying is one: 'Nappa slays you in cold
--- blood!' then a misty void, Arrival, Waiting in Line and King Yemma's Office,
--- four rooms of afterlife filed into the Ginyu Base because nothing said
--- otherwise. Asking Yemma to send you home is the same thing in reverse.
-local pendingWarp = nil
-local expectExits = false
+whereAt.vnum = nil
+whereAt.hash = ""
+-- Everything waiting on the next room line, in one place.
+--
+-- These were seven file-scope locals split across lines 222 and 3150, which
+-- is a thousand lines apart for one lifecycle -- and this chunk is one local
+-- from Lua's 200 ceiling, where a 'local' at file scope is one of the 200
+-- whether it holds a number or a function.
+--
+--   cmd      the last compass step typed, waiting for a room
+--   at       when it was typed
+--   travel   an explicit 'dbgo', armed for exactly one room
+--   warp     a move nobody typed, holding why. Dying is one: 'Nappa slays
+--            you in cold blood!' then a misty void, Arrival, Waiting in Line
+--            and King Yemma's Office -- four rooms of afterlife filed into
+--            the Ginyu Base because nothing said otherwise. Asking Yemma to
+--            send you home is the same thing in reverse.
+--   doors    what the last snapshot said about doors
+--   terrain  and about terrain
+--   near     sectors read off the cells around the anchor
+--
+-- The last three are held for the same reason as the first four: the snapshot
+-- arrives BEFORE the room line, so reading it and writing straight away put
+-- every room's doors onto the room we had just left -- 10021, 10022 and 10023
+-- all ended up with the one door that belongs to 10022 alone.
+local pend = { cmd = nil, at = 0, travel = nil, warp = nil,
+               doors = nil, terrain = nil, near = nil }
+whereAt.wantExits = false
 
 -- How we got into the room we are in, so the exits line that follows can close
 -- the loop and record the way back.
-local cameFrom = nil
-local cameBy = nil
+whereAt.from = nil
+whereAt.by = nil
 
 -- A command only counts as a move if the room line follows it more or less
 -- immediately. The training bot walks with send(), which never reaches
@@ -254,13 +283,21 @@ local lastError = "none"
 -- MUD sends no GMCP at all, so it has no idea where we are and sits on its
 -- "start exploring" placeholder however many rooms the database holds. There is
 -- no call to tell it -- getPlayerRoom is read-only in the API. A mapper widget
+-- Everything about how the map is being LOOKED at, in one table.
+--
+-- Twelve file-scope locals, and a file-scope local is one of Lua's 200
+-- whether it holds a number or a function. The comments stay where they were
+-- written: each one still sits over the thing it explains, and only the name
+-- on the left changed.
+local view = {}
+
 -- pinned with lockedArea draws the area regardless of the player's location,
 -- which is the documented way out of exactly this.
-local mapWidgetId = nil
+view.id = nil
 
 -- Shown unless it was hidden. A map plugin whose map is off by default is a
 -- map plugin that looks broken on the first run.
-local wantPanel = true
+view.want = true
 
 -- Which picture the panel draws.
 --
@@ -274,7 +311,7 @@ local wantPanel = true
 --
 -- Both, because neither answers the other's question. Area is the default: it
 -- is the whole map, and seeing all of it is usually the point.
-local viewMode = "area"
+view.mode = "area"
 
 -- Where the panel is looking, as an offset from the room you are standing in.
 -- Zero on all three means centred on you, which is the normal state.
@@ -285,7 +322,7 @@ local viewMode = "area"
 -- Area view only. Local view lays the neighbourhood out by walking exits
 -- outward from where you are, so there is no coordinate to offset and no way to
 -- reach a floor you are not on.
-local viewOff = { x = 0, y = 0, z = 0 }
+view.off = { x = 0, y = 0, z = 0 }
 
 -- Drag-to-pan, so the map is pulled around like a paper one.
 --
@@ -294,18 +331,18 @@ local viewOff = { x = 0, y = 0, z = 0 }
 -- the grid's edge -- and the redraw happens once per room CROSSED rather than
 -- once per mouse event, because every redraw is a round trip out to Lua and
 -- back and mousemove fires continuously.
-local drag = { on = false, x = 0, y = 0 }
+view.drag = { on = false, x = 0, y = 0 }
 
 -- Measured rather than asked for: widgetInfo lied about the panel size, so this
 -- comes off the resize event and starts at whatever the widget was made with.
-local panelPx = { w = 320, h = 340 }
+view.px = { w = 320, h = 340 }
 
 -- The grid is a square that fits inside what is left after the head and the
 -- foot, so the smaller axis sets its edge. Approximate on purpose -- this only
 -- decides how far a drag travels, and being a few pixels out is invisible.
 local function gridEdgePx()
-    local w = panelPx.w - 12
-    local h = panelPx.h - 70
+    local w = view.px.w - 12
+    local h = view.px.h - 70
     if w < 40 then w = 40 end
     if h < 40 then h = 40 end
     if w < h then return w end
@@ -313,13 +350,13 @@ local function gridEdgePx()
 end
 
 local function viewCentred()
-    return viewOff.x == 0 and viewOff.y == 0 and viewOff.z == 0
+    return view.off.x == 0 and view.off.y == 0 and view.off.z == 0
 end
 
 local function recentre()
-    viewOff.x = 0
-    viewOff.y = 0
-    viewOff.z = 0
+    view.off.x = 0
+    view.off.y = 0
+    view.off.z = 0
 end
 
 -- How many rooms out the panel draws, which is what zooming changes. Fewer
@@ -327,18 +364,18 @@ end
 -- Rooms out from you, so a low number is zoomed IN. One shows you and your
 -- immediate neighbours filling the panel; twenty-five is most of an area at
 -- a few pixels a room.
-local ZOOM = { min = 1, max = 25 }
-local zoom = 7
+view.ZOOM = { min = 1, max = 25 }
+view.zoom = 7
 
 -- The picker, when the area name in the footer is clicked. Its own state
 -- rather than a mode of the map, because it replaces the map while it is up.
 -- Which overlay is over the map, if any: "pick" or "settings".
-local overlay = nil
-local pickFilter = ""
+view.overlay = nil
+view.filter = ""
 
 -- Writes land in the database without the panel noticing. refreshMap makes it
 -- re-read; only worth doing when something actually changed.
-local dirty = false
+view.dirty = false
 
 -- Vnums in the order we minted them, newest last. Dying teleports you somewhere
 -- with no command behind it, so the rooms on the far side get filed under
@@ -517,13 +554,22 @@ local function publishArea(name)
     if block then mapCall("setAreaUserData", name, "dbmap.base", tostring(block)) end
 end
 
+-- Everything the map is DRAWN with, in one table: the sector palette, the
+-- style and sector lookups built from it, the hex table, the stylesheet, the
+-- flag prefixes and their looks, the fallback grey, the panel background and
+-- the door cells.
+--
+-- Ten file-scope locals for one subject, and a file-scope local is one of
+-- Lua's 200 whether it holds a number or a stylesheet.
+local paint = {}
+
 -- The server's own sector palette, captured 2026-08-13 from Map.Definition.
 --
 -- Baked in because the definition only arrives if Scouter is running -- the
 -- Mapper deliberately never negotiates that package -- and the settings pane
 -- needs a default to show either way. A live Map.Definition always wins over
 -- this; it is the floor, not the answer.
-local DEFAULT_SECTOR = {
+paint.DEFAULT = {
     air = "#008080", barren = "#808000", blands = "#800000", bridge = "#ff00ff",
     city = "#c0c0c0", desert = "#ffff00", exit = "#ffffff", field = "#00ff00",
     forest = "#008000", glacier = "#ffffff", grassland = "#00ff00",
@@ -540,12 +586,12 @@ local DEFAULT_SECTOR = {
 -- The server's live palette, filled from Map.Definition when Scouter's
 -- handshake brings one in. Empty until then, which is exactly why DEFAULT_SECTOR
 -- above exists.
-local styleColour = {}
+paint.style = {}
 
 -- Colours chosen here, overriding the server's for that sector. Kept in map
 -- user data rather than plugin prefs: prefs do not survive a reinstall -- the
 -- client keys them by a runtime id -- and these are meant to outlive updates.
-local sectorColour = {}
+paint.sector = {}
 
 -- '#rrggbb' to 'r,g,b', by position rather than by pattern. %x is not on the
 -- list of classes this runtime's pattern translation survives, and a colour
@@ -561,7 +607,7 @@ local sectorColour = {}
 -- Which meant sector colouring never worked either, except by accident: the
 -- only hexes that survived were ones like #808080 whose pairs happen to be
 -- decimal digits, and those rendered as the wrong grey rather than as nothing.
-local HEXVAL = {
+paint.HEX = {
     ["0"] = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3, ["4"] = 4,
     ["5"] = 5, ["6"] = 6, ["7"] = 7, ["8"] = 8, ["9"] = 9,
     ["a"] = 10, ["b"] = 11, ["c"] = 12, ["d"] = 13, ["e"] = 14, ["f"] = 15,
@@ -569,8 +615,8 @@ local HEXVAL = {
 
 local function hexPair(s)
     if type(s) ~= "string" or #s ~= 2 then return nil end
-    local hi = HEXVAL[s:sub(1, 1):lower()]
-    local lo = HEXVAL[s:sub(2, 2):lower()]
+    local hi = paint.HEX[s:sub(1, 1):lower()]
+    local lo = paint.HEX[s:sub(2, 2):lower()]
     if hi == nil or lo == nil then return nil end
     return hi * 16 + lo
 end
@@ -588,14 +634,14 @@ end
 
 -- The strip under the map naming what each symbol means. On once there is more
 -- than one symbol to tell apart; every flag that draws a glyph gets a line.
-local showLegend = true
+view.legend = true
 
 -- 'sector=#rrggbb' a line at a time. A flat string rather than a table because
 -- mapPut stores strings, and one line per sector diffs readably if anyone ever
 -- looks at the map file by hand.
 local function publishColours()
     local out = {}
-    for sector, hex in pairs(sectorColour) do
+    for sector, hex in pairs(paint.sector) do
         if type(sector) == "string" and type(hex) == "string" and hex ~= "" then
             out[#out + 1] = sector .. "=" .. hex
         end
@@ -605,7 +651,7 @@ local function publishColours()
 end
 
 local function readColours(blob)
-    sectorColour = {}
+    paint.sector = {}
     if type(blob) ~= "string" or blob == "" then return end
 
     for line in blob:gmatch("[^\n]+") do
@@ -614,7 +660,7 @@ local function readColours(blob)
         local sector, hex = line:match("^(%S+)=(%S+)$")
         -- checked on the way in, not only on the way out: this ends up inside a
         -- stylesheet and a map file can be edited by hand
-        if sector and rgbOf(hex) then sectorColour[sector:lower()] = hex end
+        if sector and rgbOf(hex) then paint.sector[sector:lower()] = hex end
     end
 end
 
@@ -631,23 +677,23 @@ local function savePrefs()
         bases = bases,
         travels = travels,
         recent = recent,
-        distx = dist.x,
-        disty = dist.y,
+        distx = nav.dist.x,
+        disty = nav.dist.y,
         mode = mode,
-        widget = wantPanel and "yes" or "no",
-        view = viewMode,
-        zoom = zoom,
+        widget = view.want and "yes" or "no",
+        view = view.mode,
+        zoom = view.zoom,
         stats = st,
     }, "global")
 
     publishColours()
-    mapPut("dbmap.distance", dist.x .. "," .. dist.y)
+    mapPut("dbmap.distance", nav.dist.x .. "," .. nav.dist.y)
     mapPut("dbmap.area", area)
-    mapPut("dbmap.panel", wantPanel and "yes" or "no")
-    mapPut("dbmap.here", hereHash)
-    mapPut("dbmap.zoom", tostring(zoom))
-    mapPut("dbmap.view", viewMode)
-    mapPut("dbmap.legend", showLegend and "yes" or "no")
+    mapPut("dbmap.panel", view.want and "yes" or "no")
+    mapPut("dbmap.here", whereAt.hash)
+    mapPut("dbmap.zoom", tostring(view.zoom))
+    mapPut("dbmap.view", view.mode)
+    mapPut("dbmap.legend", view.legend and "yes" or "no")
     mapPut("dbmap.on", mode)
 end
 
@@ -661,8 +707,8 @@ local function adoptFromMap()
         local dx, dy = said:match("^(%d+),(%d+)$")
         if not dx then dx, dy = said, said end
         local nx, ny = safeNum(dx), safeNum(dy)
-        if nx and nx >= 1 and nx <= 8 then dist.x = math.floor(nx) end
-        if ny and ny >= 1 and ny <= 8 then dist.y = math.floor(ny) end
+        if nx and nx >= 1 and nx <= 8 then nav.dist.x = math.floor(nx) end
+        if ny and ny >= 1 and ny <= 8 then nav.dist.y = math.floor(ny) end
     end
 
     -- Plugin prefs do not survive a reinstall: the client keys them by a
@@ -683,18 +729,18 @@ local function adoptFromMap()
     end
 
     local panel = mapGet("dbmap.panel")
-    if panel == "no" then wantPanel = false
-    elseif panel == "yes" then wantPanel = true end
+    if panel == "no" then view.want = false
+    elseif panel == "yes" then view.want = true end
 
     local z = safeNum(mapGet("dbmap.zoom"))
-    if z and z >= ZOOM.min and z <= ZOOM.max then zoom = math.floor(z) end
+    if z and z >= view.ZOOM.min and z <= view.ZOOM.max then view.zoom = math.floor(z) end
 
     local lg = mapGet("dbmap.legend")
-    if lg == "no" then showLegend = false
-    elseif lg == "yes" then showLegend = true end
+    if lg == "no" then view.legend = false
+    elseif lg == "yes" then view.legend = true end
 
     local vm = mapGet("dbmap.view")
-    if vm == "area" or vm == "local" then viewMode = vm end
+    if vm == "area" or vm == "local" then view.mode = vm end
 
     local on = mapGet("dbmap.on")
     -- 'yes' and 'no' are what versions before the third mode wrote.
@@ -709,8 +755,8 @@ local function adoptFromMap()
     if wasHash and wasHash ~= "" then
         local known = safeNum(mapCall("getRoomIDbyHash", wasHash))
         if known and known >= 0 then
-            hereVnum = known
-            hereHash = wasHash
+            whereAt.vnum = known
+            whereAt.hash = wasHash
         end
     end
 
@@ -770,8 +816,8 @@ local function loadPrefs()
         end
     end
     local px, py = safeNum(p.distx), safeNum(p.disty)
-    if px and px >= 1 and px <= 8 then dist.x = math.floor(px) end
-    if py and py >= 1 and py <= 8 then dist.y = math.floor(py) end
+    if px and px >= 1 and px <= 8 then nav.dist.x = math.floor(px) end
+    if py and py >= 1 and py <= 8 then nav.dist.y = math.floor(py) end
 
     -- Survives a reload, so 'take' still works on rooms recorded before one.
     if type(p.recent) == "table" then
@@ -790,10 +836,10 @@ local function loadPrefs()
     elseif p.enabled == "no" then
         mode = "off"
     end
-    if p.widget == "yes" then wantPanel = true end
-    if p.view == "local" or p.view == "area" then viewMode = p.view end
+    if p.widget == "yes" then view.want = true end
+    if p.view == "local" or p.view == "area" then view.mode = p.view end
     local z = safeNum(p.zoom)
-    if z and z >= ZOOM.min and z <= ZOOM.max then zoom = math.floor(z) end
+    if z and z >= view.ZOOM.min and z <= view.ZOOM.max then view.zoom = math.floor(z) end
     if type(p.stats) == "table" then
         for _, k in ipairs({ "rooms", "exits", "stubs", "specials", "seen" }) do
             local n = safeNum(p.stats[k])
@@ -838,34 +884,38 @@ end
 -- Where every room in the current area sits, keyed "x,y,z". Built once and
 -- reused: placement and drawing both want it, and asking the map for every room
 -- on every step was a sweep per move that grew with the map.
-local posIndex = nil
+-- The position index and what it holds. Named 'place' because 'pos' is
+-- already a local in takeRooms.
+local place = {}
+
+place.index = nil
 
 -- Which floors this area actually has, collected while the index is built
 -- because that pass already reads every room's z. Sorted low to high, so the
 -- layer buttons know where the stack ends.
-local posFloors = nil
+place.floors = nil
 
 -- Which sectors this area actually contains, collected in the same pass. The
 -- MUD names forty-one of them and a settings pane listing all forty-one in a
 -- 320px panel is a wall; the handful you have actually walked is a list.
-local posTerrains = nil
+place.terrains = nil
 
 local function forgetPositions()
-    posIndex = nil
-    posFloors = nil
-    posTerrains = nil
+    place.index = nil
+    place.floors = nil
+    place.terrains = nil
 end
 
 local function positions()
-    if posIndex then return posIndex end
-    posIndex = {}
-    posFloors = {}
-    posTerrains = {}
+    if place.index then return place.index end
+    place.index = {}
+    place.floors = {}
+    place.terrains = {}
 
     local seenT = {}
     local seen = {}
     local list = mapCall("getAreaRooms", area)
-    if type(list) ~= "table" then return posIndex end
+    if type(list) ~= "table" then return place.index end
 
     for _, raw in ipairs(list) do
         -- safeNum, because a vnum crossing back can be a string, and then
@@ -877,10 +927,10 @@ local function positions()
         if type(r) == "table" then
             local x, y, z = safeNum(r.x), safeNum(r.y), safeNum(r.z)
             if x and y and z then
-                posIndex[x .. "," .. y .. "," .. z] = vnum
+                place.index[x .. "," .. y .. "," .. z] = vnum
                 if not seen[z] then
                     seen[z] = true
-                    posFloors[#posFloors + 1] = z
+                    place.floors[#place.floors + 1] = z
                 end
             end
 
@@ -891,13 +941,13 @@ local function positions()
             if t == "default" then t = nil end
             if type(t) == "string" and t ~= "" and not seenT[t] then
                 seenT[t] = true
-                posTerrains[#posTerrains + 1] = t
+                place.terrains[#place.terrains + 1] = t
             end
         end
     end
-    table.sort(posFloors)
-    table.sort(posTerrains)
-    return posIndex
+    table.sort(place.floors)
+    table.sort(place.terrains)
+    return place.index
 end
 
 -- Every sector there is, whether or not this map has met one.
@@ -919,13 +969,13 @@ local function sectorList()
         end
     end
 
-    for name in pairs(DEFAULT_SECTOR) do put(name) end
-    for name in pairs(styleColour) do
+    for name in pairs(paint.DEFAULT) do put(name) end
+    for name in pairs(paint.style) do
         if type(name) == "string" and name:sub(1, 7) == "sector." then
             put(name:sub(8))
         end
     end
-    for name in pairs(sectorColour) do put(name) end
+    for name in pairs(paint.sector) do put(name) end
 
     table.sort(out)
     return out
@@ -934,16 +984,16 @@ end
 -- The sectors this area contains, in name order.
 local function terrains()
     positions()
-    if type(posTerrains) ~= "table" then return {} end
-    return posTerrains
+    if type(place.terrains) ~= "table" then return {} end
+    return place.terrains
 end
 
 -- The floors this area has, low to high. positions() fills it, so ask for the
 -- index first rather than trusting whatever was left from the last area.
 local function floors()
     positions()
-    if type(posFloors) ~= "table" then return {} end
-    return posFloors
+    if type(place.floors) ~= "table" then return {} end
+    return place.floors
 end
 
 -- Push every room from a line outward, opening a gap along it.
@@ -973,7 +1023,7 @@ local function widenAt(axis, at, sign)
 
     if moved > 0 then
         forgetPositions()
-        dirty = true
+        view.dirty = true
     end
     return moved > 0
 end
@@ -987,7 +1037,7 @@ end
 -- too long -- a wrong room in the right place reads as truth.
 local function placeNear(fromVnum, dir)
     if not fromVnum or not dir then return nil, nil, nil end
-    local step = STEP[dir]
+    local step = nav.STEP[dir]
     if not step then return nil, nil, nil end
 
     local room = mapCall("getMapRoom", fromVnum)
@@ -998,7 +1048,7 @@ local function placeNear(fromVnum, dir)
     local z = safeNum(room.z)
     if not x or not y or not z then return nil, nil, nil end
 
-    x, y = x + step[1] * dist.x, y + step[2] * dist.y
+    x, y = x + step[1] * nav.dist.x, y + step[2] * nav.dist.y
     z = z + step[3]
 
     local at = positions()
@@ -1015,7 +1065,7 @@ local function placeNear(fromVnum, dir)
     -- not something to do behind your back: 'dbmap stretch'.
     local px, py = x, y
     for _ = 1, 6 do
-        px, py = px + step[1] * dist.x, py + step[2] * dist.y
+        px, py = px + step[1] * nav.dist.x, py + step[2] * nav.dist.y
         if not at[px .. "," .. py .. "," .. z] then return px, py, z end
     end
 
@@ -1204,8 +1254,8 @@ local function ensureRoom(hash, name, fromVnum, dir)
             for dy = -ring, ring do
                 for dx = -ring, ring do
                     if not spot and (math.abs(dx) == ring or math.abs(dy) == ring) then
-                        local px = bx + dx * dist.x
-                        local py = by + dy * dist.y
+                        local px = bx + dx * nav.dist.x
+                        local py = by + dy * nav.dist.y
                         if not at[px .. "," .. py .. "," .. bz] then
                             spot = { px, py, bz }
                         end
@@ -1226,7 +1276,7 @@ local function ensureRoom(hash, name, fromVnum, dir)
         local ox, tries = 0, 0
         local at = positions()
         while at[ox .. ",0,0"] and tries < 500 do
-            ox = ox + dist.x
+            ox = ox + nav.dist.x
             tries = tries + 1
         end
         fields.x = ox
@@ -1241,7 +1291,7 @@ local function ensureRoom(hash, name, fromVnum, dir)
     mapCall("setRoomIDbyHash", fresh, hash)
 
     st.rooms = st.rooms + 1
-    dirty = true
+    view.dirty = true
     forgetPositions()
 
     recent[#recent + 1] = fresh
@@ -1283,7 +1333,7 @@ local function recordStubs(vnum, dirs)
             mapCall("setExitStub", vnum, d, false)
         elseif mapCall("setExitStub", vnum, d) then
             st.stubs = st.stubs + 1
-            dirty = true
+            view.dirty = true
         end
     end
 end
@@ -1299,7 +1349,7 @@ local function recordMove(fromVnum, dir, toVnum)
 
     if mapCall("setMapExit", fromVnum, dir, toVnum) then
         st.exits = st.exits + 1
-        dirty = true
+        view.dirty = true
 
         -- By destination rather than by direction. Given a vnum it works the
         -- direction out from the two rooms and, when the far room holds the
@@ -1325,7 +1375,7 @@ local function recordTravel(fromVnum, cmd, toVnum)
 
     if mapCall("addSpecialExit", fromVnum, cmd, toVnum) then
         st.specials = st.specials + 1
-        dirty = true
+        view.dirty = true
         -- Now on the record as a real travel verb, which is what keeps 'dbmap
         -- clean' from taking it back out again.
         travels[cmd] = true
@@ -1343,8 +1393,8 @@ end
 ----------------------------------------------------------------------
 
 local function repaint()
-    if not dirty then return end
-    dirty = false
+    if not view.dirty then return end
+    view.dirty = false
     mapCall("refreshMap")
 end
 
@@ -1357,22 +1407,27 @@ end
 --
 -- White because that is what this MUD's own map uses for the current room.
 -- Explicitly, since highlightRoom defaults to yellow and yellow is the mob.
-local HERE = "#ffffff"
+-- The geometry the grid is drawn on: the colour of the room you are standing
+-- in, the diagonal ratio, the angles, which directions count as diagonal, and
+-- where the anchor sits. Six file-scope locals, one subject.
+local geo = {}
+
+geo.HERE = "#ffffff"
 
 local function markHere()
-    if not hereVnum then return end
+    if not whereAt.vnum then return end
     mapCall("unhighlightRoom")     -- no argument: only this plugin's marks
-    mapCall("highlightRoom", hereVnum, HERE)
+    mapCall("highlightRoom", whereAt.vnum, geo.HERE)
 end
 
 local function hideMap()
-    if not mapWidgetId then return false end
+    if not view.id then return false end
     local kill = callable("destroyWidget")
     if kill then
-        local id = mapWidgetId
+        local id = view.id
         pcall(function() return kill(id) end)
     end
-    mapWidgetId = nil
+    view.id = nil
     return true
 end
 
@@ -1387,26 +1442,26 @@ local function viewScale()
     -- one radius for both axes so the box stays square and a percentage means
     -- the same thing horizontally and vertically; the wider axis sets it, so
     -- the tighter one simply shows more rooms
-    local radius = math.max(dist.x, dist.y) * zoom
+    local radius = math.max(nav.dist.x, nav.dist.y) * view.zoom
     local unit = 100 / (radius * 2 + 1)
     -- rooms smaller than their spacing, so the gap between two unconnected
     -- corridors stays visible
-    return radius, unit, unit * math.min(dist.x, dist.y) * 0.56
+    return radius, unit, unit * math.min(nav.dist.x, nav.dist.y) * 0.56
 end
-local ROOT2 = 1.41421356
+geo.ROOT2 = 1.41421356
 
 -- Which way each exit points, and how long a step is that way. Only eight
 -- angles are possible, so they are written out rather than reached for through
 -- atan2 -- exact, and one less thing the transpiler can get wrong.
-local ANGLE = {
+geo.ANGLE = {
     e = 0, se = 45, s = 90, sw = 135, w = 180, nw = 225, n = 270, ne = 315,
 }
-local DIAGONAL = { ne = true, nw = true, se = true, sw = true }
+geo.DIAGONAL = { ne = true, nw = true, se = true, sw = true }
 
 -- Colour lives in classes. The widget sanitiser strips inline colour, so a
 -- style attribute carrying one arrives with the colour gone and every room
 -- draws the same. Position is not colour, so it can stay inline.
-local CSS = ".dbi-wm{height:100%;box-sizing:border-box;padding:6px;overflow:hidden;"
+paint.CSS = ".dbi-wm{height:100%;box-sizing:border-box;padding:6px;overflow:hidden;"
     .. "display:flex;flex-direction:column;container-type:size;"
     .. "background-color:#0b0f16;color:#c8d2e4;font-family:ui-monospace,monospace;}"
     -- head and foot, not hd/ft: .ft is already the colour of a room with exits
@@ -1551,14 +1606,14 @@ local CSS = ".dbi-wm{height:100%;box-sizing:border-box;padding:6px;overflow:hidd
 -- Chamber'. Only letters whose meaning is actually known go in here. An
 -- unrecognised prefix is left alone rather than guessed at and given a name it
 -- may not have; add a line when a meaning is confirmed, not when it is assumed.
-local PREFIX_FLAGS = {
+paint.PREFIX = {
     h = "healing",
 }
 
 -- What the flags this plugin defines look like. Rooms tagged with anything not
 -- in here still carry the tag; it simply draws nothing, which is the documented
 -- behaviour and exactly what you want for a tag you have not decided about yet.
-local FLAG_LOOKS = {
+paint.FLAGS = {
     healing = { color = "#1d4d33", symbol = "+", symbolColor = "#66e0a0" },
 
     -- A room that takes you somewhere: a tesseract bay, a portal, anything you
@@ -1581,7 +1636,7 @@ local function flagFromName(name)
     -- stops matching letters here; outside one it expands and works.
     local letter = name:match("^%((%a)%)%s")
     if not letter then return nil end
-    return PREFIX_FLAGS[letter:lower()]
+    return paint.PREFIX[letter:lower()]
 end
 
 -- Tag a room from its name. Safe to run on every arrival: the check makes it a
@@ -1590,7 +1645,7 @@ local function applyNameFlag(vnum, name)
     local flag = flagFromName(name)
     if not vnum or not flag then return end
     if mapCall("roomHasFlag", vnum, flag) then return end
-    if mapCall("setRoomFlag", vnum, flag, true) then dirty = true end
+    if mapCall("setRoomFlag", vnum, flag, true) then view.dirty = true end
 end
 
 -- Teach the client what this plugin's flags look like. Called once the map is
@@ -1603,7 +1658,7 @@ local function defineFlags()
     local have = safeMap(mapCall("getMapFlags"))
 
     local made = 0
-    for name, look in pairs(FLAG_LOOKS) do
+    for name, look in pairs(paint.FLAGS) do
         local was = have[name]
 
         -- Only skip a definition that actually LOOKS like something. Tagging a
@@ -1632,7 +1687,7 @@ local function defineFlags()
     -- lines later, so marking it is enough -- and drawPanel is declared four
     -- hundred lines below here, which a call from this scope would resolve as a
     -- nil global rather than an error.
-    if made > 0 then dirty = true end
+    if made > 0 then view.dirty = true end
 end
 
 -- The MUD's own palette, off Map.Definition. It names a colour for every
@@ -1657,27 +1712,27 @@ end
 -- never named still has to show SOMETHING -- and whatever it shows has to be
 -- the same value this returns, or saving the form without touching a row would
 -- store that placeholder as a deliberate choice.
-local NO_SECTOR = "#808080"
+paint.NONE = "#808080"
 
 local function defaultColour(terrain)
-    if type(terrain) ~= "string" or terrain == "" then return NO_SECTOR end
+    if type(terrain) ~= "string" or terrain == "" then return paint.NONE end
 
-    local live = styleColour["sector." .. terrain]
+    local live = paint.style["sector." .. terrain]
     if type(live) == "string" and live ~= "" then return live end
 
-    local baked = DEFAULT_SECTOR[terrain]
+    local baked = paint.DEFAULT[terrain]
     if type(baked) == "string" and baked ~= "" then return baked end
-    return NO_SECTOR
+    return paint.NONE
 end
 
 local function colourFor(terrain)
     if type(terrain) ~= "string" or terrain == "" then return nil end
-    local mine = sectorColour[terrain]
+    local mine = paint.sector[terrain]
     if type(mine) == "string" and mine ~= "" then return mine end
 
-    local live = styleColour["sector." .. terrain]
+    local live = paint.style["sector." .. terrain]
     if type(live) == "string" and live ~= "" then return live end
-    return DEFAULT_SECTOR[terrain]
+    return paint.DEFAULT[terrain]
 end
 
 -- A colour laid over the panel's own background, returned solid.
@@ -1687,7 +1742,7 @@ end
 -- readable on top of it. Composited here rather than left as rgba(), because a
 -- translucent room lets the connection behind it show through and every line
 -- appears to run over the top of the rooms it joins.
-local BG = { 11, 15, 22 }   -- #0b0f16, the panel
+paint.BG = { 11, 15, 22 }   -- #0b0f16, the panel
 
 local function over(rgb, alpha)
     if type(rgb) ~= "string" then return nil end
@@ -1697,7 +1752,7 @@ local function over(rgb, alpha)
     for part in rgb:gmatch("[^,]+") do
         local n = safeNum(part)
         if not n or i > 3 then return nil end
-        out[i] = math.floor(BG[i] + (n - BG[i]) * alpha + 0.5)
+        out[i] = math.floor(paint.BG[i] + (n - paint.BG[i]) * alpha + 0.5)
         i = i + 1
     end
     if i ~= 4 then return nil end
@@ -1779,15 +1834,15 @@ local function terrainCss()
     -- every sector the server named, plus any this map has a colour for that it
     -- did not
     local names = {}
-    for name in pairs(styleColour) do
+    for name in pairs(paint.style) do
         if type(name) == "string" and name:sub(1, 7) == "sector." then
             names[name:sub(8)] = true
         end
     end
-    for name in pairs(sectorColour) do
+    for name in pairs(paint.sector) do
         if type(name) == "string" then names[name] = true end
     end
-    for name in pairs(DEFAULT_SECTOR) do names[name] = true end
+    for name in pairs(paint.DEFAULT) do names[name] = true end
 
     local out = {}
     for sector in pairs(names) do
@@ -1827,15 +1882,15 @@ local function drawSettings()
     local here = 0
     if type(counts) == "table" then here = safeNum(counts[area]) or 0 end
 
-    setWidgetProperty(mapWidgetId, "content",
-        "<style>" .. CSS .. "</style><div class='dbi-wm'>"
+    setWidgetProperty(view.id, "content",
+        "<style>" .. paint.CSS .. "</style><div class='dbi-wm'>"
         .. "<div class='bar'><div class='head'>map settings</div>"
         .. "<div class='zb' data-mud-action='pickoff'>x</div></div>"
         .. "<div class='pk'>"
-        .. row("view", viewMode == "area" and "whole area" or "around you")
-        .. row("zoom", zoom .. " rooms out")
-        .. row("distance east/west", tostring(dist.x))
-        .. row("distance north/south", tostring(dist.y))
+        .. row("view", view.mode == "area" and "whole area" or "around you")
+        .. row("zoom", view.zoom .. " rooms out")
+        .. row("distance east/west", tostring(nav.dist.x))
+        .. row("distance north/south", tostring(nav.dist.y))
         .. row("mode", mode)
         .. row("area", area)
         .. row("rooms here", tostring(here))
@@ -1864,7 +1919,7 @@ local function drawLooks()
     local t = {}
     local function add(x) t[#t + 1] = x end
 
-    add("<style>" .. CSS .. "</style><div class='dbi-wm'>")
+    add("<style>" .. paint.CSS .. "</style><div class='dbi-wm'>")
     add("<div class='bar'><div class='head'>colours and symbols</div>")
     add("<div class='zb' data-mud-action='pickoff'>x</div></div>")
 
@@ -1892,9 +1947,9 @@ local function drawLooks()
         -- way back to the server's value is the reset beside it rather than
         -- clearing the box. The text form still works if the sanitiser will not
         -- have a picker -- a browser renders an unknown input type as text.
-        local shown = sectorColour[sector] or defaultColour(sector)
+        local shown = paint.sector[sector] or defaultColour(sector)
         local mine = ""
-        if sectorColour[sector] then mine = " mapped" end
+        if paint.sector[sector] then mine = " mapped" end
 
         local mark = ""
         if present[sector] then mark = "<span class='wh'>here</span>" end
@@ -1942,7 +1997,7 @@ local function drawLooks()
     add("</form>")
 
     add("<div class='foot' data-mud-action='pickoff'>back to the map</div></div>")
-    setWidgetProperty(mapWidgetId, "content", table.concat(t))
+    setWidgetProperty(view.id, "content", table.concat(t))
 end
 
 -- The area list: everything the MUD's own 'areas' command knows, plus anything
@@ -1954,7 +2009,7 @@ local function drawPicker()
         for name, n in pairs(list) do have[name] = safeNum(n) or 0 end
     end
 
-    local want = pickFilter:lower()
+    local want = view.filter:lower()
     local rows, shown, total = {}, 0, 0
     local seen = {}
 
@@ -2000,29 +2055,29 @@ local function drawPicker()
 
     if #rows == 0 then
         rows[1] = "<div class='row'><span class='an'>nothing matching '"
-            .. esc(pickFilter) .. "'</span></div>"
+            .. esc(view.filter) .. "'</span></div>"
     end
 
-    setWidgetProperty(mapWidgetId, "content",
-        "<style>" .. CSS .. "</style><div class='dbi-wm'>"
+    setWidgetProperty(view.id, "content",
+        "<style>" .. paint.CSS .. "</style><div class='dbi-wm'>"
         .. "<div class='bar'><div class='head'>choose an area</div>"
         .. "<div class='zb' data-mud-action='pickoff'>x</div></div>"
-        .. "<form class='sf'><input type='text' name='q' value='" .. esc(pickFilter)
+        .. "<form class='sf'><input type='text' name='q' value='" .. esc(view.filter)
         .. "' placeholder='search'><button type='submit'>find</button></form>"
         .. "<div class='pk'>" .. table.concat(rows) .. "</div>"
         .. "<div class='foot'>" .. shown .. " of " .. total .. "</div></div>")
 end
 
 local function drawPanel()
-    if not mapWidgetId then return end
-    if overlay == "pick" then return drawPicker() end
-    if overlay == "settings" then return drawSettings() end
-    if overlay == "looks" then return drawLooks() end
+    if not view.id then return end
+    if view.overlay == "pick" then return drawPicker() end
+    if view.overlay == "settings" then return drawSettings() end
+    if view.overlay == "looks" then return drawLooks() end
 
-    local here = hereVnum and mapCall("getMapRoom", hereVnum)
+    local here = whereAt.vnum and mapCall("getMapRoom", whereAt.vnum)
     if type(here) ~= "table" then
-        setWidgetProperty(mapWidgetId, "content",
-            "<style>" .. CSS .. "</style><div class='dbi-wm'>"
+        setWidgetProperty(view.id, "content",
+            "<style>" .. paint.CSS .. "</style><div class='dbi-wm'>"
             .. "<div class='bar'><div class='head'>walk into a room</div></div>"
             .. "<div class='gr'></div>"
             .. "<div class='foot' data-mud-action='pickon'>" .. esc(area) .. "</div></div>")
@@ -2040,12 +2095,12 @@ local function drawPanel()
     local shown = {}
     local RADIUS, UNIT, NODE = viewScale()
 
-    if viewMode == "area" then
+    if view.mode == "area" then
         local at = positions()
         for dy = -RADIUS, RADIUS do
             for dx = -RADIUS, RADIUS do
-                local vnum = at[(cx + viewOff.x + dx) .. ","
-                    .. (cy + viewOff.y + dy) .. "," .. (cz + viewOff.z)]
+                local vnum = at[(cx + view.off.x + dx) .. ","
+                    .. (cy + view.off.y + dy) .. "," .. (cz + view.off.z)]
                 if vnum then shown[vnum] = { dx, dy } end
             end
         end
@@ -2054,23 +2109,23 @@ local function drawPanel()
         -- coordinates carry every compromise made while the area was being
         -- explored; this carries none, because it is computed fresh and only
         -- has to hold together across a few rooms.
-        local queue, head, tail = { hereVnum }, 1, 1
-        local depth = { [hereVnum] = 0 }
-        local taken = { ["0,0"] = hereVnum }
-        shown[hereVnum] = { 0, 0 }
+        local queue, head, tail = { whereAt.vnum }, 1, 1
+        local depth = { [whereAt.vnum] = 0 }
+        local taken = { ["0,0"] = whereAt.vnum }
+        shown[whereAt.vnum] = { 0, 0 }
 
         while head <= tail do
             local vnum = queue[head]
             head = head + 1
-            if depth[vnum] < zoom then
+            if depth[vnum] < view.zoom then
                 local r = mapCall("getMapRoom", vnum)
                 if type(r) == "table" and type(r.exits) == "table" then
                     for d, dest in pairs(r.exits) do
-                        local step = STEP[d]
+                        local step = nav.STEP[d]
                         local to = safeNum(dest)
                         if step and to and not shown[to] then
-                            local nx = shown[vnum][1] + step[1] * dist.x
-                            local ny = shown[vnum][2] + step[2] * dist.y
+                            local nx = shown[vnum][1] + step[1] * nav.dist.x
+                            local ny = shown[vnum][2] + step[2] * nav.dist.y
                             local k = nx .. "," .. ny
                             -- A square already used means this neighbourhood
                             -- folds back on itself. Leave the room out rather
@@ -2104,7 +2159,7 @@ local function drawPanel()
     -- trusting. Once the view has been moved off you it stops being true, and
     -- forcing it anyway pinned the @ to the middle of a floor it was not on and
     -- dragged that room into the picture with it.
-    local me = safeNum(hereVnum)
+    local me = safeNum(whereAt.vnum)
     if me and viewCentred() then shown[me] = { 0, 0 } end
 
     -- Percent of the box for an offset, measured to the middle of the room.
@@ -2159,7 +2214,7 @@ local function drawPanel()
         if type(r) == "table" and type(r.exits) == "table" then
             for dir, dest in pairs(r.exits) do
                 local to = shown[safeNum(dest)]
-                local angle = ANGLE[dir]
+                local angle = geo.ANGLE[dir]
                 if to then
                     local ax, ay = off[1], off[2]
                     local runX, runY = to[1] - ax, to[2] - ay
@@ -2231,14 +2286,14 @@ local function drawPanel()
         local rec = info[vnum]
         if rec then
             for _, d in ipairs(rec.stubs) do
-                local step = STEP[d]
+                local step = nav.STEP[d]
                 if step and (step[1] ~= 0 or step[2] ~= 0) then
-                    local ux = off[1] + step[1] * dist.x
-                    local uy = off[2] + step[2] * dist.y
+                    local ux = off[1] + step[1] * nav.dist.x
+                    local uy = off[2] + step[2] * nav.dist.y
                     local k = ux .. "," .. uy
                     local room4 = used[k]
-                    local runX = step[1] * dist.x
-                    local runY = step[2] * dist.y
+                    local runX = step[1] * nav.dist.x
+                    local runY = step[2] * nav.dist.y
 
                     -- The square is taken by some other room the layout put
                     -- there. Real rooms get nudged to the nearest free square
@@ -2493,7 +2548,7 @@ local function drawPanel()
     -- local view lays the neighbourhood out by walking exits from where you are
     -- standing, so there is no coordinate to offset and no floor to step to.
     local layerBits, badge = "", ""
-    if viewMode == "area" then
+    if view.mode == "area" then
         if #floors() > 1 then
             layerBits = "<div class='zb' data-mud-action='layerup'>&#9650;</div>"
                 .. "<div class='zb' data-mud-action='layerdown'>&#9660;</div>"
@@ -2504,11 +2559,11 @@ local function drawPanel()
         -- screen there is otherwise nothing to say the map is not about you.
         if not viewCentred() then
             local bits = {}
-            if viewOff.z ~= 0 then
-                local sign = viewOff.z > 0 and "+" or ""
-                bits[#bits + 1] = "floor " .. sign .. viewOff.z
+            if view.off.z ~= 0 then
+                local sign = view.off.z > 0 and "+" or ""
+                bits[#bits + 1] = "floor " .. sign .. view.off.z
             end
-            if viewOff.x ~= 0 or viewOff.y ~= 0 then bits[#bits + 1] = "panned" end
+            if view.off.x ~= 0 or view.off.y ~= 0 then bits[#bits + 1] = "panned" end
             badge = "<div class='lay' data-mud-action='pancentre'>"
                 .. esc(table.concat(bits, " ")) .. " &#8635;</div>"
         end
@@ -2517,7 +2572,7 @@ local function drawPanel()
     -- Only flags that actually draw something get a line: a purely semantic
     -- tag has nothing to explain.
     local legendHtml = ""
-    if showLegend then
+    if view.legend then
         local seen = {}
         for name, def in pairs(flagDefs) do
             if type(name) == "string" and type(def) == "table"
@@ -2542,11 +2597,11 @@ local function drawPanel()
         end
     end
 
-    setWidgetProperty(mapWidgetId, "content",
+    setWidgetProperty(view.id, "content",
         -- the sector colours go on the end, because the palette lands long
         -- after the static sheet is built
         -- flags after terrain, because a flag colour paints over a sector one
-        "<style>" .. CSS .. terrainCss() .. flagCss() .. "</style>"
+        "<style>" .. paint.CSS .. terrainCss() .. flagCss() .. "</style>"
         .. "<div class='dbi-wm'>"
         .. "<div class='bar'>"
         .. "<div class='head'>" .. esc(here.name or "?") .. "</div>"
@@ -2603,9 +2658,9 @@ local function applyLooks(f)
             -- page and pressing save would freeze the server's colours as
             -- overrides and the map would stop following it.
             if val == "" or val:lower() == defaultColour(sector):lower() then
-                sectorColour[sector] = nil
+                paint.sector[sector] = nil
             elseif rgbOf(val) then
-                sectorColour[sector] = val
+                paint.sector[sector] = val
             end
         end
 
@@ -2642,7 +2697,7 @@ local function applyLooks(f)
     end
 
     savePrefs()
-    dirty = true
+    view.dirty = true
     repaint()
 end
 
@@ -2653,21 +2708,21 @@ local function dragStart(e)
     if type(e) ~= "table" then return end
     local x, y = safeNum(e.x), safeNum(e.y)
     if not x or not y then return end
-    if y < 30 or y > panelPx.h - 30 then return end
+    if y < 30 or y > view.px.h - 30 then return end
 
-    drag.on = true
-    drag.x = x
-    drag.y = y
+    view.drag.on = true
+    view.drag.x = x
+    view.drag.y = y
 end
 
 local function dragEnd()
-    drag.on = false
+    view.drag.on = false
 end
 
 -- Pull the map the way the mouse went: drag right and the view moves left, the
 -- same as dragging a sheet of paper across a desk.
 local function dragMove(e)
-    if not drag.on or type(e) ~= "table" then return end
+    if not view.drag.on or type(e) ~= "table" then return end
     local x, y = safeNum(e.x), safeNum(e.y)
     if not x or not y then return end
 
@@ -2676,8 +2731,8 @@ local function dragMove(e)
     local radius, unit = viewScale()
     local edge = gridEdgePx()
 
-    local perX = edge * (dist.x * unit) / 100
-    local perY = edge * (dist.y * unit) / 100
+    local perX = edge * (nav.dist.x * unit) / 100
+    local perY = edge * (nav.dist.y * unit) / 100
     if perX < 4 then perX = 4 end
     if perY < 4 then perY = 4 end
 
@@ -2685,24 +2740,24 @@ local function dragMove(e)
 
     -- One room per threshold crossed, and the leftover stays on the cursor so a
     -- slow drag accumulates instead of being rounded away.
-    while x - drag.x >= perX do
-        viewOff.x = viewOff.x - dist.x
-        drag.x = drag.x + perX
+    while x - view.drag.x >= perX do
+        view.off.x = view.off.x - nav.dist.x
+        view.drag.x = view.drag.x + perX
         moved = true
     end
-    while drag.x - x >= perX do
-        viewOff.x = viewOff.x + dist.x
-        drag.x = drag.x - perX
+    while view.drag.x - x >= perX do
+        view.off.x = view.off.x + nav.dist.x
+        view.drag.x = view.drag.x - perX
         moved = true
     end
-    while y - drag.y >= perY do
-        viewOff.y = viewOff.y - dist.y
-        drag.y = drag.y + perY
+    while y - view.drag.y >= perY do
+        view.off.y = view.off.y - nav.dist.y
+        view.drag.y = view.drag.y + perY
         moved = true
     end
-    while drag.y - y >= perY do
-        viewOff.y = viewOff.y + dist.y
-        drag.y = drag.y - perY
+    while view.drag.y - y >= perY do
+        view.off.y = view.off.y + nav.dist.y
+        view.drag.y = view.drag.y - perY
         moved = true
     end
 
@@ -2712,7 +2767,7 @@ end
 local function showMap()
     -- Already up: redraw it rather than doing nothing, so 'dbmap show' is a
     -- way to refresh the panel and not just a no-op.
-    if mapWidgetId then
+    if view.id then
         drawPanel()
         return true
     end
@@ -2739,7 +2794,7 @@ local function showMap()
         return false
     end
 
-    mapWidgetId = id
+    view.id = id
 
     -- One place that switches area, so the command and the picker cannot drift
     -- apart. New rooms go there; nothing already recorded moves.
@@ -2776,10 +2831,10 @@ local function showMap()
                     return
                 end
 
-                if overlay ~= "pick" then return end
+                if view.overlay ~= "pick" then return end
                 local q = ""
                 if f then q = tostring(f.q or "") end
-                pickFilter = trimBoth(q)
+                view.filter = trimBoth(q)
                 drawPicker()
             end)
         end)
@@ -2810,8 +2865,8 @@ local function showMap()
             return reg(wid, "resize", function(e)
                 if type(e) ~= "table" then return end
                 local w, h = safeNum(e.width), safeNum(e.height)
-                if w and w > 40 then panelPx.w = w end
-                if h and h > 40 then panelPx.h = h end
+                if w and w > 40 then view.px.w = w end
+                if h and h > 40 then view.px.h = h end
             end)
         end)
     end
@@ -2824,7 +2879,7 @@ local function showMap()
 
                 local what = data.action
                 if what == "looks" then
-                    overlay = "looks"
+                    view.overlay = "looks"
                     safeDraw("colours", drawPanel)
                     return
                 end
@@ -2832,9 +2887,9 @@ local function showMap()
                 if what == "creset" then
                     local sector = trimBoth(tostring(data.data or "")):lower()
                     if sector ~= "" then
-                        sectorColour[sector] = nil
+                        paint.sector[sector] = nil
                         savePrefs()
-                        dirty = true
+                        view.dirty = true
                         repaint()
                         safeDraw("colours", drawLooks)
                     end
@@ -2842,9 +2897,9 @@ local function showMap()
                 end
 
                 if what == "looksreset" then
-                    sectorColour = {}
+                    paint.sector = {}
                     savePrefs()
-                    dirty = true
+                    view.dirty = true
                     repaint()
                     safeDraw("colours", drawLooks)
                     say("sector colours back to the MUD's own.")
@@ -2862,9 +2917,9 @@ local function showMap()
                 -- and a roof and nothing between them is two steps, not four --
                 -- so this walks the sorted list rather than adding one.
                 if what == "layerup" or what == "layerdown" then
-                    local at = hereVnum and mapCall("getMapRoom", hereVnum)
+                    local at = whereAt.vnum and mapCall("getMapRoom", whereAt.vnum)
                     local base = safeNum(type(at) == "table" and at.z) or 0
-                    local cur = base + viewOff.z
+                    local cur = base + view.off.z
 
                     local want = nil
                     for _, z in ipairs(floors()) do
@@ -2880,7 +2935,7 @@ local function showMap()
                             .. " this one in " .. area .. ".", "#ffb02e")
                         return
                     end
-                    viewOff.z = want - base
+                    view.off.z = want - base
                     drawPanel()
                     return
                 end
@@ -2889,18 +2944,18 @@ local function showMap()
                     -- Finer steps close in, where one room either way is a
                     -- visible difference, and coarser further out where it is
                     -- not worth the clicks.
-                    local step = zoom <= 8 and 1 or 3
+                    local step = view.zoom <= 8 and 1 or 3
                     if what == "zoomin" then step = -step end
 
-                    local want = zoom + step
-                    zoom = math.max(ZOOM.min, math.min(ZOOM.max, want))
+                    local want = view.zoom + step
+                    view.zoom = math.max(view.ZOOM.min, math.min(view.ZOOM.max, want))
                     savePrefs()
                     drawPanel()
 
                     -- Say so rather than appearing to ignore the click.
-                    if want ~= zoom then
+                    if want ~= view.zoom then
                         say("that is as far " .. (what == "zoomin" and "in" or "out")
-                            .. " as it goes: " .. zoom .. " room(s) out.", "#ffb02e")
+                            .. " as it goes: " .. view.zoom .. " room(s) out.", "#ffb02e")
                     end
                     return
                 end
@@ -2919,7 +2974,7 @@ local function showMap()
                     local raw = tostring(data.data or "")
                     local at, dir = raw:match("^(%d+):(%S+)$")
                     local vnum = safeNum(at)
-                    if not vnum or not OPPOSITE[dir] then return end
+                    if not vnum or not nav.OPPOSITE[dir] then return end
 
                     local doors = mapCall("getDoors", vnum)
                     local now = 0
@@ -2940,38 +2995,38 @@ local function showMap()
                     if type(room) == "table" and type(room.exits) == "table" then
                         far = safeNum(room.exits[dir])
                     end
-                    if far then mapCall("setDoor", far, OPPOSITE[dir], nextStatus) end
+                    if far then mapCall("setDoor", far, nav.OPPOSITE[dir], nextStatus) end
 
                     local WORD = { [0] = "gone", "open", "closed", "locked" }
                     say("door " .. dir .. ": " .. (WORD[nextStatus] or "?"))
-                    dirty = true
+                    view.dirty = true
                     repaint()
                     drawPanel()
                     return
                 end
 
                 if what == "pickon" then
-                    overlay = "pick"
-                    pickFilter = ""
+                    view.overlay = "pick"
+                    view.filter = ""
                     drawPanel()
                     return
                 end
 
                 if what == "settings" then
-                    overlay = "settings"
+                    view.overlay = "settings"
                     drawPanel()
                     return
                 end
 
                 if what == "pickoff" then
-                    overlay = nil
+                    view.overlay = nil
                     drawPanel()
                     return
                 end
 
                 if what == "pick" then
                     switchTo(trimBoth(tostring(data.data or "")))
-                    overlay = nil
+                    view.overlay = nil
                     drawPanel()
                     return
                 end
@@ -2979,19 +3034,19 @@ local function showMap()
                 if what ~= "walk" then return end
 
                 local target = safeNum(data.data)
-                if not target or target == hereVnum then return end
+                if not target or target == whereAt.vnum then return end
 
                 -- Walked here rather than handed to walkTo, which needs the
                 -- client's own map panel open and says so after a two second
                 -- timeout -- a strange thing to require of a plugin that drew
                 -- its own map. findPath works headless, so this asks for the
                 -- directions and sends them.
-                if not hereVnum then
+                if not whereAt.vnum then
                     say("nowhere yet -- 'look' first.", "#ff6666")
                     return
                 end
 
-                local path = mapCall("findPath", hereVnum, target)
+                local path = mapCall("findPath", whereAt.vnum, target)
                 if type(path) ~= "table" or type(path.directions) ~= "table" then
                     say("no way there from here that the map knows about.", "#ffb02e")
                     return
@@ -3014,10 +3069,10 @@ local function showMap()
                 local function stepOn()
                     i = i + 1
                     if i > n then return end
-                    local d = CANON[steps[i]:lower()]
+                    local d = nav.CANON[steps[i]:lower()]
                     if d then
-                        pendingCmd = d
-                        pendingAt = os.time()
+                        pend.cmd = d
+                        pend.at = os.time()
                     end
                     send(steps[i])
                     if timer and i < n then
@@ -3050,12 +3105,12 @@ end
 ----------------------------------------------------------------------
 
 -- Cell offsets from the anchor, per direction.
-local DOOR_CELL = {
+paint.DOOR = {
     n  = {  0, -1 }, s  = {  0,  1 }, e  = {  1,  0 }, w  = { -1,  0 },
     ne = {  1, -1 }, nw = { -1, -1 }, se = {  1,  1 }, sw = { -1,  1 },
 }
 
-local anchorX, anchorY = 7, 7
+geo.ax, geo.ay = 7, 7
 
 -- 'sector.inside' to 'inside'. The map stores a terrain string and the client
 -- colours by it, so the prefix is ours to drop.
@@ -3069,8 +3124,14 @@ end
 
 -- The last snapshot, kept so 'dbmap doors' can show what the server actually
 -- said about the cells around you rather than us guessing why nothing matched.
-local lastSnap = nil
-local snapCount = 0
+-- The last snapshot and what has been worked out from it. Named 'shot'
+-- rather than 'snap' on purpose: 'snap' is a parameter name in rowsOf, flat
+-- and unwrapSnap, and a file-scope table those shadow is a table those
+-- functions cannot reach.
+local shot = {}
+
+shot.last = nil
+shot.count = 0
 
 -- A GMCP array can arrive 0-indexed, as an object with numeric keys, or as
 -- something else entirely. ipairs is the one thing that converts correctly.
@@ -3137,22 +3198,9 @@ end
 -- This is worth more than intercepting the input. A macro's send never reaches
 -- onCommand, and neither does a plugin's -- the training bot has had the same
 -- blind spot from the start. The snapshot arrives whatever moved you.
-local prevRows = nil
-local snapDir = nil
-local snapDirAt = 0
-
--- What the last snapshot said about the room it was drawn for, held until the
--- room line says which room that is.
---
--- The snapshot arrives BEFORE the room line, so reading it and writing straight
--- away put every room's doors onto the room we had just left: 10021, 10022 and
--- 10023 all ended up with the one door that belongs to 10022 alone.
-local pendingDoors = nil
-local pendingTerrain = nil
-
--- Sectors read off the cells around the anchor, held until the room line says
--- which room the snapshot belonged to.
-local pendingNear = nil
+shot.prev = nil
+shot.dir = nil
+shot.dirAt = 0
 
 local function rowsOf(snap)
     local out, n = flat(snap.rows)
@@ -3195,13 +3243,13 @@ local function readMovement(snap)
     local new, n = rowsOf(snap)
     if not new then return end
 
-    local old = prevRows
-    prevRows = new
+    local old = shot.prev
+    shot.prev = new
     if not old then return end
 
     -- Rooms are two cells apart in this grid, so one step is a two-cell shift.
     local best, bestDir, second = -1, nil, -1
-    for dir, step in pairs(STEP) do
+    for dir, step in pairs(nav.STEP) do
         if step[3] == 0 then
             local s = fitScore(old, new, n, -step[1] * 2, -step[2] * 2)
             if s > best then
@@ -3221,22 +3269,22 @@ local function readMovement(snap)
     -- asked for is a clear winner: a good fit that beats both standing still
     -- and every other direction by a margin, or nothing is claimed at all.
     if bestDir and best > 0.85 and best > still + 0.02 and best > second + 0.02 then
-        snapDir = bestDir
-        snapDirAt = os.time()
+        shot.dir = bestDir
+        shot.dirAt = os.time()
     end
 end
 
 local function readDoors(payload)
     local snap = unwrapSnap(payload) or payload
     if type(snap) ~= "table" then return end
-    lastSnap = snap
-    snapCount = snapCount + 1
+    shot.last = snap
+    shot.count = shot.count + 1
 
     -- Before the door read, and whether or not we know where we are: the
     -- comparison needs every snapshot to keep its chain unbroken.
     readMovement(snap)
 
-    if not hereVnum then return end
+    if not whereAt.vnum then return end
     local runs = snap.runs
     if type(runs) ~= "table" then return end
 
@@ -3253,30 +3301,30 @@ local function readDoors(payload)
     --
     -- Which means a room's own sector arrives one step late: you learn it when
     -- you are standing next door. There is nowhere else it can come from.
-    pendingTerrain = nil
-    pendingNear = {}
-    for dir, step in pairs(STEP) do
+    pend.terrain = nil
+    pend.near = {}
+    for dir, step in pairs(nav.STEP) do
         if step[3] == 0 then
-            local t = terrainOf(styleAt(runs, anchorX + step[1] * 2,
-                                              anchorY + step[2] * 2))
+            local t = terrainOf(styleAt(runs, geo.ax + step[1] * 2,
+                                              geo.ay + step[2] * 2))
             -- A cell showing 'updown', 'mob', 'item' or 'aggro' is telling us
             -- about its contents rather than its ground, so it says nothing
             -- about the sector and nothing is recorded for it.
-            if t then pendingNear[dir] = t end
+            if t then pend.near[dir] = t end
         end
     end
 
-    pendingDoors = {}
-    for dir, off in pairs(DOOR_CELL) do
-        local style = styleAt(runs, anchorX + off[1], anchorY + off[2])
+    pend.doors = {}
+    for dir, off in pairs(paint.DOOR) do
+        local style = styleAt(runs, geo.ax + off[1], geo.ay + off[2])
         -- Closed and locked only. The server draws a plain 'exit' for an open
         -- door and for a doorway that never had a door in it, so reading one as
         -- 'the door we know about is standing open' was an inference rather than
         -- a reading -- and a wrong door recorded once got downgraded to open
         -- instead of removed, which is how faded doorways ended up scattered
         -- over connections that have never had a door.
-        if style == "door.locked" then pendingDoors[dir] = 3
-        elseif style == "door.closed" then pendingDoors[dir] = 2 end
+        if style == "door.locked" then pend.doors[dir] = 3
+        elseif style == "door.closed" then pend.doors[dir] = 2 end
     end
 end
 
@@ -3287,35 +3335,35 @@ local function applySnapshot(vnum)
     -- Each neighbour's sector, onto the neighbour. The exits are read off the
     -- room the snapshot was actually drawn for, which is why this waits for the
     -- room line rather than running where the cells were read.
-    if type(pendingNear) == "table" then
+    if type(pend.near) == "table" then
         local me = mapCall("getMapRoom", vnum)
         local exits = {}
         if type(me) == "table" and type(me.exits) == "table" then exits = me.exits end
 
-        for dir, t in pairs(pendingNear) do
+        for dir, t in pairs(pend.near) do
             local to = safeNum(exits[dir])
             if to then
                 local r = mapCall("getMapRoom", to)
                 if type(r) == "table" and r.terrain ~= t then
                     if mapCall("updateMapRoom", to, { terrain = t }) then
                         forgetPositions()
-                        dirty = true
+                        view.dirty = true
                     end
                 end
             end
         end
     end
-    pendingNear = nil
+    pend.near = nil
 
-    if pendingTerrain then
+    if pend.terrain then
         local r = mapCall("getMapRoom", vnum)
-        if type(r) == "table" and r.terrain ~= pendingTerrain then
-            mapCall("updateMapRoom", vnum, { terrain = pendingTerrain })
+        if type(r) == "table" and r.terrain ~= pend.terrain then
+            mapCall("updateMapRoom", vnum, { terrain = pend.terrain })
             -- the position index carries the sector list with it, so a room
             -- learning its terrain has to drop the cache or the settings pane
             -- lists whatever was true when it was built
             forgetPositions()
-            dirty = true
+            view.dirty = true
         end
     end
 
@@ -3323,16 +3371,16 @@ local function applySnapshot(vnum)
     -- pass is a door standing open, and taking the record away for it would have
     -- the doorway flicker off the map every time someone left it open. Removing
     -- a door stays a decision, which is what clicking it is for.
-    if type(pendingDoors) == "table" then
-        for dir, status in pairs(pendingDoors) do
+    if type(pend.doors) == "table" then
+        for dir, status in pairs(pend.doors) do
             if status == 2 or status == 3 then
-                if mapCall("setDoor", vnum, dir, status) then dirty = true end
+                if mapCall("setDoor", vnum, dir, status) then view.dirty = true end
             end
         end
     end
 
-    pendingDoors = nil
-    pendingTerrain = nil
+    pend.doors = nil
+    pend.terrain = nil
 end
 
 ----------------------------------------------------------------------
@@ -3342,28 +3390,28 @@ end
 local function arrive(hash, name)
     st.seen = st.seen + 1
 
-    local fromVnum = hereVnum
+    local fromVnum = whereAt.vnum
 
     -- An explicit 'dbgo' is the only thing that can cross to another planet or
     -- write a special exit.
-    local travel = pendingTravel
-    pendingTravel = nil
+    local travel = pend.travel
+    pend.travel = nil
 
-    local warp = pendingWarp
-    pendingWarp = nil
+    local warp = pend.warp
+    pend.warp = nil
 
-    local dir = pendingCmd
-    pendingCmd = nil
-    if dir and os.time() - pendingAt > STALE then dir = nil end
+    local dir = pend.cmd
+    pend.cmd = nil
+    if dir and os.time() - pend.at > STALE then dir = nil end
 
     -- Nothing typed, so ask the local map which way the world just moved. This
     -- is how a macro, an alias or another plugin's send gets its exit recorded
     -- -- none of them reach onCommand, and the numpad is most of how this MUD
     -- is walked.
-    if not dir and snapDir and os.time() - snapDirAt <= STALE then
-        dir = snapDir
+    if not dir and shot.dir and os.time() - shot.dirAt <= STALE then
+        dir = shot.dir
     end
-    snapDir = nil
+    shot.dir = nil
 
     -- An instant transmission landing. Only when nothing else explains the
     -- move: a direction means you walked somewhere while it was still aligning,
@@ -3398,15 +3446,15 @@ local function arrive(hash, name)
         -- read for the panel, never applied, so they must not survive to be
         -- written the moment recording comes back on. One statement each:
         -- multi-assignment is only accepted on a declaration in this runtime.
-        pendingDoors = nil
-        pendingNear = nil
-        pendingTerrain = nil
+        pend.doors = nil
+        pend.near = nil
+        pend.terrain = nil
 
         local known = safeNum(mapCall("getRoomIDbyHash", hash))
         if known and known < 0 then known = nil end
 
-        hereVnum = known
-        if known then hereHash = hash else hereHash = "" end
+        whereAt.vnum = known
+        if known then whereAt.hash = hash else whereAt.hash = "" end
 
         repaint()
         markHere()
@@ -3470,7 +3518,7 @@ local function arrive(hash, name)
         end
     end
 
-    cameFrom, cameBy = nil, nil
+    whereAt.from, whereAt.by = nil, nil
     if fromVnum then
         if travel then
             recordTravel(fromVnum, travel, vnum)
@@ -3478,12 +3526,12 @@ local function arrive(hash, name)
             recordMove(fromVnum, dir, vnum)
             -- Held for the exits line, which arrives next and says whether the
             -- way back exists.
-            cameFrom, cameBy = fromVnum, dir
+            whereAt.from, whereAt.by = fromVnum, dir
         end
     end
 
-    hereVnum = vnum
-    hereHash = hash
+    whereAt.vnum = vnum
+    whereAt.hash = hash
 
     -- The MUD says what kind of room this is in the name itself, so read it.
     applyNameFlag(vnum, name)
@@ -3570,7 +3618,7 @@ local function cleanMap(commit)
         if commit then
             if mapCall("removeSpecialExit", b.vnum, b.cmd) then
                 st.specials = st.specials - 1
-                dirty = true
+                view.dirty = true
             end
         end
     end
@@ -3694,9 +3742,9 @@ local function relayout(commit)
         -- somewhere clear of everything placed so far
         local x, y = 0, 0
         for _, p in pairs(pos) do
-            if p[2] >= y then y = p[2] + dist.y * 2 end
+            if p[2] >= y then y = p[2] + nav.dist.y * 2 end
         end
-        while at[key(x, y)] do x = x + dist.x end
+        while at[key(x, y)] do x = x + nav.dist.x end
         pos[vnum] = { x, y }
         at[key(x, y)] = vnum
         tail = tail + 1
@@ -3714,12 +3762,12 @@ local function relayout(commit)
 
         if type(exits) == "table" then
             for dir, dest in pairs(exits) do
-                local step = STEP[dir]
+                local step = nav.STEP[dir]
                 local to = safeNum(dest)
                 if step and to and inArea[to] and not pos[to] then
                     local px, py = pos[vnum][1], pos[vnum][2]
-                    local tx = px + step[1] * dist.x
-                    local ty = py + step[2] * dist.y
+                    local tx = px + step[1] * nav.dist.x
+                    local ty = py + step[2] * nav.dist.y
 
                     -- Out of room: take the nearest free square to where it
                     -- should have gone.
@@ -3798,7 +3846,7 @@ local function relayout(commit)
     end
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
     say(wrote .. " room(s) laid out again, " .. nudged
@@ -3837,7 +3885,7 @@ local function unnudgeRoom(vnum)
     setNudge(vnum, 0, 0)
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
     say(tostring(r.name) .. " put back.")
@@ -3870,8 +3918,8 @@ local function nudgeRange(fromV, toV, dirWord, howFar, undo)
     local step = nil
     local dir = nil
     if not undo then
-        dir = CANON[dirWord or ""]
-        if dir then step = STEP[dir] end
+        dir = nav.CANON[dirWord or ""]
+        if dir then step = nav.STEP[dir] end
         if not step then
             say("dbmap nudge <vnum>-<vnum> <dir> [squares] | reset", "#ff6666")
             return
@@ -3937,7 +3985,7 @@ local function nudgeRange(fromV, toV, dirWord, howFar, undo)
     end
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
 
@@ -3975,8 +4023,8 @@ local function nudgeRange(fromV, toV, dirWord, howFar, undo)
 end
 
 local function nudgeRoom(vnum, dirWord, howFar)
-    local dir = CANON[dirWord or ""]
-    local step = dir and STEP[dir]
+    local dir = nav.CANON[dirWord or ""]
+    local step = dir and nav.STEP[dir]
     if not step then
         say("dbmap nudge [<vnum>] <dir|reset> [squares]", "#ff6666")
         return
@@ -4041,7 +4089,7 @@ local function nudgeRoom(vnum, dirWord, howFar)
     end
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
 
@@ -4061,7 +4109,7 @@ end
 -- send. Every one of them answers "No current room found." We know exactly
 -- where we are, so these work where those cannot.
 local function pathTo(target)
-    if not hereVnum then
+    if not whereAt.vnum then
         say("nowhere yet -- 'look' first.", "#ff6666")
         return nil
     end
@@ -4069,7 +4117,7 @@ local function pathTo(target)
         say("dbmap goto <vnum>", "#ff6666")
         return nil
     end
-    if target == hereVnum then
+    if target == whereAt.vnum then
         say("you are already there.", "#ffb02e")
         return nil
     end
@@ -4080,7 +4128,7 @@ local function pathTo(target)
         return nil
     end
 
-    local path = mapCall("findPath", hereVnum, target)
+    local path = mapCall("findPath", whereAt.vnum, target)
     if type(path) ~= "table" or type(path.directions) ~= "table" then
         say("no way there from here that the map knows about.", "#ffb02e")
         return nil
@@ -4107,14 +4155,14 @@ end
 --
 -- 'speedwalk nnnneq' walks it in one command, which beats the client's own
 -- '3n2eu' -- that reads nicely and cannot be sent anywhere.
-local WALK_LETTER = {
+nav.LETTER = {
     n = "n", s = "s", e = "e", w = "w", u = "u", d = "d",
     ne = "q", nw = "r", se = "t", sw = "y",
 }
 
 -- Spelled out for 'open' and 'unlock'. The MUD takes abbreviations, but a
 -- route you might read back later should not need decoding.
-local DIR_WORD = {
+nav.WORD = {
     n = "north", s = "south", e = "east", w = "west",
     ne = "northeast", nw = "northwest", se = "southeast", sw = "southwest",
     u = "up", d = "down",
@@ -4124,10 +4172,10 @@ local DIR_WORD = {
 -- trusting the shape of what findPath returns alongside its directions.
 local function roomsAlong(steps, n)
     local out = {}
-    local at = hereVnum
+    local at = whereAt.vnum
     for i = 1, n do
         out[i] = at
-        local d = CANON[steps[i]:lower()]
+        local d = nav.CANON[steps[i]:lower()]
         local r = at and mapCall("getMapRoom", at)
         if type(r) == "table" and type(r.exits) == "table" and d then
             at = safeNum(r.exits[d])
@@ -4161,8 +4209,8 @@ local function routeLines(steps, n)
     end
 
     for i = 1, n do
-        local d = CANON[steps[i]:lower()]
-        local letter = d and WALK_LETTER[d]
+        local d = nav.CANON[steps[i]:lower()]
+        local letter = d and nav.LETTER[d]
         -- One step it cannot encode makes the whole thing wrong rather than
         -- short, so say so instead of handing over a route that walks into a
         -- wall.
@@ -4174,9 +4222,9 @@ local function routeLines(steps, n)
         if status == 2 or status == 3 then
             flushRun()
             if status == 3 then
-                lines[#lines + 1] = "unlock " .. (DIR_WORD[d] or d)
+                lines[#lines + 1] = "unlock " .. (nav.WORD[d] or d)
             end
-            lines[#lines + 1] = "open " .. (DIR_WORD[d] or d)
+            lines[#lines + 1] = "open " .. (nav.WORD[d] or d)
         end
 
         run[#run + 1] = letter
@@ -4204,18 +4252,18 @@ local function walkPath(steps, n)
         i = i + 1
         if i > n then return end
 
-        local d = CANON[steps[i]:lower()]
+        local d = nav.CANON[steps[i]:lower()]
 
         -- Anything shut gets opened first, or the walk stops here and the map
         -- carries on believing we went through.
         local doors = from[i] and mapCall("getDoors", from[i])
         local status = type(doors) == "table" and d and safeNum(doors[d]) or nil
-        if status == 3 then send("unlock " .. (DIR_WORD[d] or d)) end
-        if status == 2 or status == 3 then send("open " .. (DIR_WORD[d] or d)) end
+        if status == 3 then send("unlock " .. (nav.WORD[d] or d)) end
+        if status == 2 or status == 3 then send("open " .. (nav.WORD[d] or d)) end
 
         if d then
-            pendingCmd = d
-            pendingAt = os.time()
+            pend.cmd = d
+            pend.at = os.time()
         end
         send(steps[i])
 
@@ -4256,7 +4304,7 @@ local function findRooms(q, limit)
             shown = shown + 1
 
             local mark = ""
-            if vnum == hereVnum then mark = " <- you are here" end
+            if vnum == whereAt.vnum then mark = " <- you are here" end
 
             local doorN = 0
             local doors = mapCall("getDoors", vnum)
@@ -4323,23 +4371,23 @@ end
 -- or putting a room in two places. Anchoring here makes it predictable -- push
 -- everything east of me further east -- and a loop cannot confuse it.
 local function stretchFrom(dirWord, amount)
-    local dir = CANON[dirWord or ""]
-    if not dir or not STEP[dir] then
+    local dir = nav.CANON[dirWord or ""]
+    if not dir or not nav.STEP[dir] then
         say("dbmap stretch <n|s|e|w> [squares]", "#ff6666")
         return
     end
-    if not hereVnum then
+    if not whereAt.vnum then
         say("nowhere yet -- 'look' first.", "#ff6666")
         return
     end
 
-    local step = STEP[dir]
+    local step = nav.STEP[dir]
     if step[1] ~= 0 and step[2] ~= 0 then
         say("one axis at a time: n, s, e or w.", "#ff6666")
         return
     end
 
-    local here = mapCall("getMapRoom", hereVnum)
+    local here = mapCall("getMapRoom", whereAt.vnum)
     if type(here) ~= "table" then return end
 
     local axis = step[1] ~= 0 and "x" or "y"
@@ -4429,8 +4477,8 @@ local function refit(commit)
         return out
     end
 
-    local rankX = scaleFor(xs, dist.x)
-    local rankY = scaleFor(ys, dist.y)
+    local rankX = scaleFor(xs, nav.dist.x)
+    local rankY = scaleFor(ys, nav.dist.y)
 
     local wide = (xs[#xs] - xs[1])
     local tall = (ys[#ys] - ys[1])
@@ -4449,7 +4497,7 @@ local function refit(commit)
     end
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
     say(#rooms .. " room(s) back on a clean grid, " .. newWide .. "x" .. newTall .. ".")
@@ -4496,7 +4544,7 @@ local function respace(factor, commit)
     end
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
     say(n .. " room(s) spread out " .. factor .. "x.")
@@ -4574,9 +4622,9 @@ local function forgetRooms(what, commit)
 
             if commit then
                 mapCall("deleteMapRoom", vnum)
-                if hereVnum == vnum then
-                    hereVnum = nil
-                    hereHash = ""
+                if whereAt.vnum == vnum then
+                    whereAt.vnum = nil
+                    whereAt.hash = ""
                 end
                 for i = #recent, 1, -1 do
                     if recent[i] == vnum then table.remove(recent, i) end
@@ -4601,7 +4649,7 @@ local function forgetRooms(what, commit)
     if st.rooms < 0 then st.rooms = 0 end
     forgetPositions()
     savePrefs()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
 
@@ -4672,17 +4720,17 @@ local function clearAll(confirmed)
     travels = {}
     recent = {}
     lastFind = {}
-    hereVnum = nil
-    hereHash = ""
-    pendingCmd = nil
-    pendingTravel = nil
+    whereAt.vnum = nil
+    whereAt.hash = ""
+    pend.cmd = nil
+    pend.travel = nil
     st = { rooms = 0, exits = 0, stubs = 0, specials = 0, seen = 0 }
 
     forgetPositions()
     baseFor(area)
     mapCall("addAreaName", area)
     savePrefs()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
 
@@ -4726,7 +4774,7 @@ local function moveFound(target, commit)
     if commit then
         mapCall("addAreaName", target)
         baseFor(target)
-        dirty = true
+        view.dirty = true
         repaint()
         drawPanel()
         savePrefs()
@@ -4772,7 +4820,7 @@ local function takeRooms(n, commit)
     end
 
     if commit then
-        dirty = true
+        view.dirty = true
         repaint()
         drawPanel()
         savePrefs()
@@ -4811,7 +4859,7 @@ local function dropArea(name, commit)
     st.rooms = st.rooms - (gone or count)
     if st.rooms < 0 then st.rooms = 0 end
     savePrefs()
-    dirty = true
+    view.dirty = true
     repaint()
     say("'" .. name .. "' is gone, with " .. tostring(gone or count) .. " room(s).")
 end
@@ -4831,7 +4879,7 @@ end
 -- off. A flag does not have to be defined first -- an undefined tag is valid,
 -- it simply draws nothing until someone gives it a look.
 local function doFlag(name, on)
-    if not hereVnum then
+    if not whereAt.vnum then
         say("nowhere yet -- 'look' first.", "#ff6666")
         return
     end
@@ -4842,21 +4890,21 @@ local function doFlag(name, on)
         return
     end
 
-    local now = mapCall("setRoomFlag", hereVnum, flag, on)
+    local now = mapCall("setRoomFlag", whereAt.vnum, flag, on)
     if now == nil then
         say("could not set '" .. flag .. "': " .. lastError, "#ff6666")
         return
     end
 
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
     say("'" .. flag .. "' is " .. (now and "on" or "off") .. " for this room.")
 end
 
 local function printFlags()
-    if hereVnum then
-        local mine = mapCall("getRoomFlags", hereVnum)
+    if whereAt.vnum then
+        local mine = mapCall("getRoomFlags", whereAt.vnum)
         local names = {}
         if type(mine) == "table" then
             for _, f in ipairs(mine) do names[#names + 1] = tostring(f) end
@@ -4965,16 +5013,16 @@ local function nudgeCommand(rest)
             -- guard and a method call on the same value in one expression
             -- is evaluated whichever way the guard goes here.
             local fromHere = nil
-            if pick then fromHere = CANON[pick:lower()] end
+            if pick then fromHere = nav.CANON[pick:lower()] end
 
             -- BOTH words have to be directions for this to be the
             -- room-next-door form. 'nudge e s' is the room east of here
             -- moved south; 'nudge s 3' is THIS room moved south by three.
             local alsoDir = nil
-            if move then alsoDir = CANON[move:lower()] end
+            if move then alsoDir = nav.CANON[move:lower()] end
 
-            if fromHere and alsoDir and hereVnum then
-                local hr = mapCall("getMapRoom", hereVnum)
+            if fromHere and alsoDir and whereAt.vnum then
+                local hr = mapCall("getMapRoom", whereAt.vnum)
                 if type(hr) == "table" and type(hr.exits) == "table" then
                     at = safeNum(hr.exits[fromHere])
                 end
@@ -4991,7 +5039,7 @@ local function nudgeCommand(rest)
             local rawDir, rawN = rest:match("^(%S+)%s*(%d*)$")
             dir = textOf(rawDir)
             much = textOf(rawN)
-            at = hereVnum
+            at = whereAt.vnum
         end
 
         if not at then
@@ -5109,11 +5157,11 @@ local function groundCommand(rest)
     rest = trimBoth(rest or "")
 
     if rest == "" then
-        if not hereVnum then
+        if not whereAt.vnum then
             say("nowhere yet -- walk into a room first.", "#ff6666")
             return
         end
-        local r = mapCall("getMapRoom", hereVnum)
+        local r = mapCall("getMapRoom", whereAt.vnum)
         local had = nil
         if type(r) == "table" then had = r.terrain end
         if type(had) ~= "string" or had == "" or had == "default" then
@@ -5163,11 +5211,11 @@ local function groundCommand(rest)
             targets[1] = one
         else
             want = textOf(rest:match("^(%S+)$"))
-            if not hereVnum then
+            if not whereAt.vnum then
                 say("nowhere yet -- walk into a room first.", "#ff6666")
                 return
             end
-            targets[1] = hereVnum
+            targets[1] = whereAt.vnum
         end
     end
 
@@ -5208,7 +5256,7 @@ local function groundCommand(rest)
     end
 
     forgetPositions()
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
 
@@ -5230,13 +5278,13 @@ end
 -- reported instead of assumed. A build that will not take it says so.
 local function noteCommand(low, cmd)
     if low ~= "note" and low:sub(1, 5) ~= "note " then return false end
-    if not hereVnum then
+    if not whereAt.vnum then
         say("no room here yet -- walk somewhere first.", "#ffb02e")
         return true
     end
 
     local was = nil
-    local room = mapCall("getMapRoom", hereVnum)
+    local room = mapCall("getMapRoom", whereAt.vnum)
     if type(room) == "table" then was = textOf(room.notes) end
 
     if low == "note" then
@@ -5271,13 +5319,13 @@ local function noteCommand(low, cmd)
     local text = rest
     if adding and was then text = was .. "\n" .. rest end
 
-    local ok = mapCall("updateMapRoom", hereVnum, { notes = wipe and "" or text })
+    local ok = mapCall("updateMapRoom", whereAt.vnum, { notes = wipe and "" or text })
     if not ok then
         say("this build would not take a note.", "#ffb02e")
         return true
     end
 
-    dirty = true
+    view.dirty = true
     repaint()
     drawPanel()
     if wipe then say("note cleared.")
@@ -5301,12 +5349,12 @@ local function flagCommand(low, cmd)
     end
 
     if low == "legend" then
-        showLegend = not showLegend
+        view.legend = not view.legend
         savePrefs()
-        dirty = true
+        view.dirty = true
         repaint()
         drawPanel()
-        say("legend " .. (showLegend and "on" or "off") .. ".")
+        say("legend " .. (view.legend and "on" or "off") .. ".")
         return true
     end
 
@@ -5331,8 +5379,8 @@ local function printDiag()
     print(TAG .. "instance=" .. INSTANCE .. " live=" .. tostring(getVariable("instance")))
     print(TAG .. "ready=" .. tostring(ready) .. " mode=" .. mode)
     print(TAG .. "area=" .. area .. " block=" .. tostring(bases[area]))
-    print(TAG .. "here=" .. tostring(hereVnum) .. " hash=" .. (hereHash ~= "" and hereHash or "none"))
-    print(TAG .. "pending=" .. tostring(pendingCmd))
+    print(TAG .. "here=" .. tostring(whereAt.vnum) .. " hash=" .. (whereAt.hash ~= "" and whereAt.hash or "none"))
+    print(TAG .. "pending=" .. tostring(pend.cmd))
     print(TAG .. "recorded rooms=" .. st.rooms .. " exits=" .. st.exits
         .. " stubs=" .. st.stubs .. " specials=" .. st.specials
         .. " room lines seen=" .. st.seen)
@@ -5344,8 +5392,8 @@ local function printDiag()
         end
     end
 
-    if hereVnum then
-        local room = mapCall("getMapRoom", hereVnum)
+    if whereAt.vnum then
+        local room = mapCall("getMapRoom", whereAt.vnum)
         if type(room) == "table" then
             print(TAG .. "here name=" .. tostring(room.name)
                 .. " at " .. tostring(room.x) .. "," .. tostring(room.y) .. "," .. tostring(room.z))
@@ -5354,7 +5402,7 @@ local function printDiag()
                 for d, to in pairs(room.exits) do outs[#outs + 1] = d .. "->" .. tostring(to) end
             end
             print(TAG .. "here exits: " .. (#outs > 0 and table.concat(outs, " ") or "none"))
-            local stubs = mapCall("getExitStubs", hereVnum)
+            local stubs = mapCall("getExitStubs", whereAt.vnum)
             local names = {}
             if type(stubs) == "table" then
                 -- 0-INDEXED. 'for i = 1, #list' skips the first and runs one past.
@@ -5363,7 +5411,7 @@ local function printDiag()
             print(TAG .. "here stubs: " .. (#names > 0 and table.concat(names, " ") or "none"))
         end
     end
-    print(TAG .. "widget=" .. tostring(mapWidgetId) .. " wanted=" .. tostring(wantPanel))
+    print(TAG .. "widget=" .. tostring(view.id) .. " wanted=" .. tostring(view.want))
     -- sends running well ahead of commands means onSend hears the bot too
     print(TAG .. "onCommand fired=" .. sawCommands .. " onSend fired=" .. sawSends)
 
@@ -5444,11 +5492,11 @@ end
 local function probeDoors()
     print(TAG .. "getGMCPData Map.Snapshot -> "
         .. type(mapCall("getGMCPData", "Map.Snapshot")))
-    print(TAG .. "snapshots seen=" .. snapCount
-        .. " anchor=" .. anchorX .. "," .. anchorY
-        .. " here=" .. tostring(hereVnum))
+    print(TAG .. "snapshots seen=" .. shot.count
+        .. " anchor=" .. geo.ax .. "," .. geo.ay
+        .. " here=" .. tostring(whereAt.vnum))
 
-    if not lastSnap then
+    if not shot.last then
         say("no Map.Snapshot has arrived. Scouter asks for 'Map 1' -- is it on?",
             "#ff6666")
         return
@@ -5460,26 +5508,26 @@ local function probeDoors()
     -- since it was written -- this says so either way rather than reasoning
     -- about it from the JSON, which has now been wrong twice.
     do
-        local runs = lastSnap.runs
-        if type(unwrapSnap(lastSnap)) == "table" then
-            runs = unwrapSnap(lastSnap).runs or runs
+        local runs = shot.last.runs
+        if type(unwrapSnap(shot.last)) == "table" then
+            runs = unwrapSnap(shot.last).runs or runs
         end
 
-        print(TAG .. "anchor cell style=" .. tostring(styleAt(runs, anchorX, anchorY)))
+        print(TAG .. "anchor cell style=" .. tostring(styleAt(runs, geo.ax, geo.ay)))
 
         local said = {}
-        for dir, step in pairs(STEP) do
+        for dir, step in pairs(nav.STEP) do
             -- rooms sit two cells apart: odd cells are rooms, even ones the
             -- connector between them
             if step[3] == 0 then
                 said[#said + 1] = dir .. "=" .. tostring(
-                    styleAt(runs, anchorX + step[1] * 2, anchorY + step[2] * 2))
+                    styleAt(runs, geo.ax + step[1] * 2, geo.ay + step[2] * 2))
             end
         end
         table.sort(said)
         print(TAG .. "room cells " .. table.concat(said, " "))
 
-        local mine = hereVnum and mapCall("getMapRoom", hereVnum)
+        local mine = whereAt.vnum and mapCall("getMapRoom", whereAt.vnum)
         if type(mine) == "table" then
             print(TAG .. "this room's stored terrain=" .. tostring(mine.terrain))
         end
@@ -5488,12 +5536,12 @@ local function probeDoors()
     -- What the object actually looks like, key by key. Reasoning about the
     -- shape from the JSON the MUD prints has now been wrong twice.
     local keys = {}
-    for k, v in pairs(lastSnap) do
+    for k, v in pairs(shot.last) do
         keys[#keys + 1] = tostring(k) .. ":" .. type(v)
     end
     print(TAG .. "snapshot keys: " .. (#keys > 0 and table.concat(keys, " ") or "none"))
 
-    local runs = lastSnap.runs
+    local runs = shot.last.runs
     print(TAG .. "runs is " .. type(runs))
 
     if type(runs) == "table" then
@@ -5501,8 +5549,8 @@ local function probeDoors()
         print(TAG .. "runs flattens to " .. rn .. " row(s)")
 
         -- the anchor's row, entry by entry, element by element
-        local row = rowList[anchorY + 1]
-        print(TAG .. "row " .. anchorY .. " is " .. type(row))
+        local row = rowList[geo.ay + 1]
+        print(TAG .. "row " .. geo.ay .. " is " .. type(row))
         if type(row) == "table" then
             local entries, en = flat(row)
             print(TAG .. "  " .. en .. " run(s) on it")
@@ -5531,23 +5579,23 @@ local function probeDoors()
     end
 
     -- the row the anchor sits on, verbatim, so the geometry can be checked
-    local rows = lastSnap.rows
+    local rows = shot.last.rows
     if type(rows) == "table" then
         local flatRows, flatN = flat(rows)
-        local line = flatRows[anchorY + 1]
-        if line then print(TAG .. "row " .. anchorY .. ": " .. tostring(line)) end
+        local line = flatRows[geo.ay + 1]
+        if line then print(TAG .. "row " .. geo.ay .. ": " .. tostring(line)) end
     end
 
     for _, d in ipairs({ "n", "s", "e", "w", "ne", "nw", "se", "sw" }) do
-        local off = DOOR_CELL[d]
-        local cx = anchorX + off[1]
-        local cy = anchorY + off[2]
+        local off = paint.DOOR[d]
+        local cx = geo.ax + off[1]
+        local cy = geo.ay + off[2]
         print(TAG .. "  " .. d .. " cell " .. cx .. "," .. cy
             .. " = " .. tostring(styleAt(runs, cx, cy)))
     end
 
-    if hereVnum then
-        local got = mapCall("getDoors", hereVnum)
+    if whereAt.vnum then
+        local got = mapCall("getDoors", whereAt.vnum)
         local out = {}
         if type(got) == "table" then
             for d, s in pairs(got) do out[#out + 1] = d .. "=" .. tostring(s) end
@@ -5620,8 +5668,8 @@ local function subscribeGmcp()
 
                 if type(def.anchor) == "table" then
                     local ax, ay = safeNum(def.anchor.x), safeNum(def.anchor.y)
-                    if ax then anchorX = ax end
-                    if ay then anchorY = ay end
+                    if ax then geo.ax = ax end
+                    if ay then geo.ay = ay end
                 end
 
                 -- The palette, kept as it arrives. Colouring by anything else
@@ -5629,7 +5677,7 @@ local function subscribeGmcp()
                 if type(def.styles) == "table" then
                     for name, spec in pairs(def.styles) do
                         if type(spec) == "table" and type(spec.fg) == "string" then
-                            styleColour[tostring(name)] = spec.fg
+                            paint.style[tostring(name)] = spec.fg
                         end
                     end
                 end
@@ -5688,12 +5736,12 @@ function init()
             defineFlags()
             mapCall("addAreaName", area)
             print(TAG .. "map ready; recording into '" .. area
-                .. "', rooms " .. dist.x .. "x" .. dist.y .. " apart")
+                .. "', rooms " .. nav.dist.x .. "x" .. nav.dist.y .. " apart")
             if firstRun then noticeAreas() end
             -- after ready, not in init: the widget renders the map engine and
             -- there is nothing to render until the map is warm
-            if wantPanel then showMap() end
-            dirty = true
+            if view.want then showMap() end
+            view.dirty = true
             repaint()
         end)
     else
@@ -5704,23 +5752,23 @@ function init()
 
     -- The exits are on the line AFTER this, so onLine picks them up.
     addTrigger("Obvious exits:", function()
-        expectExits = true
+        whereAt.wantExits = true
     end)
 
     -- Walk into a closed door and the MUD says so, which is a far plainer
     -- signal than working the geometry out of the local map's cells. Proven
     -- text: 'look east' on a closed door answers 'The door is closed.'
     --
-    -- pendingCmd holds the direction, and only ever a compass one, so a 'look
+    -- pend.cmd holds the direction, and only ever a compass one, so a 'look
     -- east' that follows some other command cannot borrow its direction. The
     -- staleness window is the same one arrivals use: a door message that
     -- arrives seconds after the command it belongs to is not about it.
     local function markDoor(status)
         if not recording() then return end
-        if not hereVnum or not pendingCmd then return end
-        if os.time() - pendingAt > STALE then return end
-        if mapCall("setDoor", hereVnum, pendingCmd, status) then
-            dirty = true
+        if not whereAt.vnum or not pend.cmd then return end
+        if os.time() - pend.at > STALE then return end
+        if mapCall("setDoor", whereAt.vnum, pend.cmd, status) then
+            view.dirty = true
             repaint()
             drawPanel()
         end
@@ -5743,13 +5791,13 @@ function init()
     -- 'Nappa slays you in cold blood!' varies with whatever killed you; this
     -- line does not, and it lands before the first afterlife room.
     addTrigger("begins to fade to black", function()
-        pendingWarp = "you died"
+        pend.warp = "you died"
     end)
 
     -- The way back. 'say send me home' is not a movement command, so without
     -- this the room you land in gets filed under the afterlife.
     addTrigger("I shall return you home immediately", function()
-        pendingWarp = "you were sent home"
+        pend.warp = "you were sent home"
     end)
 
     -- The client's map has a special-exit command of its own, and it works off
@@ -5763,13 +5811,13 @@ function init()
             return
         end
 
-        if not hereVnum then
+        if not whereAt.vnum then
             say("nowhere yet -- 'look' first, so there is somewhere to leave from.", "#ff6666")
             return
         end
 
-        pendingTravel = cmd:lower()
-        pendingCmd = nil
+        pend.travel = cmd:lower()
+        pend.cmd = nil
         send(cmd)
     end, "Travel by something that isn't a compass direction, and map it")
 
@@ -5798,18 +5846,18 @@ function init()
             askFor(trimBoth(cmd:sub(5)))
 
         elseif low == "view area" or low == "view local" then
-            viewMode = low:sub(6)
+            view.mode = low:sub(6)
             savePrefs()
             drawPanel()
-            say("showing the " .. (viewMode == "area" and "whole area"
+            say("showing the " .. (view.mode == "area" and "whole area"
                 or "rooms around you, laid out from where you stand") .. ".")
 
         elseif low == "view" then
-            say("showing the " .. viewMode .. ". 'dbmap view area' for all of it, "
+            say("showing the " .. view.mode .. ". 'dbmap view area' for all of it, "
                 .. "'dbmap view local' for what is around you.")
 
         elseif low == "distance" then
-            say("east/west " .. dist.x .. ", north/south " .. dist.y
+            say("east/west " .. nav.dist.x .. ", north/south " .. nav.dist.y
                 .. ". 'dbmap distance <dir> <1-8>' for one axis, 'dbmap distance <1-8>'"
                 .. " for both, then 'dbmap relayout go' to apply it.")
 
@@ -5828,8 +5876,8 @@ function init()
                 -- Per AXIS, not per direction. If east moved three and west
                 -- moved one, walking out and back would not return you to the
                 -- coordinate you left, and the grid stops meaning anything.
-                local d = CANON[word:lower()]
-                local step = d and STEP[d]
+                local d = nav.CANON[word:lower()]
+                local step = d and nav.STEP[d]
                 if not step or (step[1] ~= 0 and step[2] ~= 0) then
                     say("a direction on one axis: n, s, e or w.", "#ff6666")
                     return
@@ -5838,15 +5886,15 @@ function init()
             end
 
             if axis then
-                dist[axis] = math.floor(want)
+                nav.dist[axis] = math.floor(want)
             else
-                dist.x = math.floor(want)
-                dist.y = math.floor(want)
+                nav.dist.x = math.floor(want)
+                nav.dist.y = math.floor(want)
             end
 
             savePrefs()
             drawPanel()
-            say("east/west " .. dist.x .. ", north/south " .. dist.y
+            say("east/west " .. nav.dist.x .. ", north/south " .. nav.dist.y
                 .. ". 'dbmap relayout go' to lay out what is already mapped at that.")
 
         elseif low == "relayout" then
@@ -5887,9 +5935,9 @@ function init()
 
         elseif low == "show" then
             if showMap() then
-                wantPanel = true
+                view.want = true
                 savePrefs()
-                dirty = true
+                view.dirty = true
                 repaint()
                 say("map panel up, pinned to '" .. area .. "'.")
             else
@@ -5897,7 +5945,7 @@ function init()
             end
 
         elseif low == "hide" then
-            wantPanel = false
+            view.want = false
             savePrefs()
             if hideMap() then
                 say("map panel closed.")
@@ -5981,17 +6029,17 @@ function init()
             baseFor(area)
             savePrefs()
             relockMap()
-            dirty = true
+            view.dirty = true
             repaint()
             say("'" .. old .. "' is now '" .. area .. "', with its "
                 .. moved .. " room(s).")
 
         elseif low == "here" then
-            if not hereVnum then
+            if not whereAt.vnum then
                 say("nowhere yet -- walk into a room, or 'look'.", "#ff6666")
                 return
             end
-            say("vnum " .. hereVnum .. "  hash " .. hereHash)
+            say("vnum " .. whereAt.vnum .. "  hash " .. whereAt.hash)
 
         elseif low:sub(1, 5) == "find " then
             findRooms(trimBoth(cmd:sub(6)), 20)
@@ -6083,8 +6131,8 @@ function onLine(sessionId, raw, clean)
 
     local text = tostring(clean or raw or "")
 
-    if expectExits then
-        expectExits = false
+    if whereAt.wantExits then
+        whereAt.wantExits = false
 
         -- Written in full rather than merged, so a bay whose list the builders
         -- change does not keep its old entries forever.
@@ -6092,17 +6140,17 @@ function onLine(sessionId, raw, clean)
             and recording() then
             mapCall("setRoomUserData", dests.at, "dests",
                 table.concat(dests.list, ", "))
-            dirty = true
+            view.dirty = true
         end
         dests.at, dests.list = nil, nil
 
         local dirs = {}
         -- '%w+' rather than a letter class: '%a' does not survive translation
         for word in text:lower():gmatch("%w+") do
-            local d = CANON[word]
+            local d = nav.CANON[word]
             if d then dirs[#dirs + 1] = d end
         end
-        if #dirs > 0 and hereVnum then
+        if #dirs > 0 and whereAt.vnum then
             -- The way back, when the MUD says there is one.
             --
             -- An exit is only recorded when it is walked, so walking a corridor
@@ -6111,18 +6159,18 @@ function onLine(sessionId, raw, clean)
             -- exits, a full explore still recorded one or two per room and the
             -- rest stayed unwalked forever. Not inferred: this fires only when
             -- the room we just arrived in lists that direction itself.
-            if cameFrom and cameBy then
-                local back = OPPOSITE[cameBy]
+            if whereAt.from and whereAt.by then
+                local back = nav.OPPOSITE[whereAt.by]
                 for _, d in ipairs(dirs) do
                     if d == back then
-                        recordMove(hereVnum, back, cameFrom)
+                        recordMove(whereAt.vnum, back, whereAt.from)
                         break
                     end
                 end
             end
-            cameFrom, cameBy = nil, nil
+            whereAt.from, whereAt.by = nil, nil
 
-            if recording() then recordStubs(hereVnum, dirs) end
+            if recording() then recordStubs(whereAt.vnum, dirs) end
             -- The exits arrive on the line AFTER the room, so arrive() has
             -- already drawn the panel by now and drew it without them. Which
             -- exits are unwalked is most of what the panel says about a room,
@@ -6137,9 +6185,9 @@ function onLine(sessionId, raw, clean)
     -- room is already current by now -- arrive() runs off the room line, which
     -- comes first -- so these attach to hereVnum rather than to pending state.
     local dest = destRow(text)
-    if dest and hereVnum then
-        if dests.at ~= hereVnum then
-            dests.at, dests.list = hereVnum, {}
+    if dest and whereAt.vnum then
+        if dests.at ~= whereAt.vnum then
+            dests.at, dests.list = whereAt.vnum, {}
         end
         dests.list[#dests.list + 1] = dest
     end
@@ -6196,14 +6244,14 @@ function onCommand(sessionId, command)
 
     noteIT(c)
 
-    local dir = CANON[c]
+    local dir = nav.CANON[c]
     -- 'look east' does not move you, but the door message that follows is
     -- about east, and that is the cheapest way to check a door deliberately.
-    if not dir then dir = CANON[c:match("^look%s+(%S+)$") or ""] end
+    if not dir then dir = nav.CANON[c:match("^look%s+(%S+)$") or ""] end
     if not dir then return nil end
 
-    pendingCmd = dir
-    pendingAt = os.time()
+    pend.cmd = dir
+    pend.at = os.time()
     return nil
 end
 
@@ -6217,20 +6265,20 @@ function onSend(sessionId, text)
 
     noteIT(c)
 
-    local dir = CANON[c]
+    local dir = nav.CANON[c]
     if not dir then return nil end
 
-    pendingCmd = dir
-    pendingAt = os.time()
+    pend.cmd = dir
+    pend.at = os.time()
     return nil
 end
 
 function onDisconnect(sessionId)
     savePrefs()
     mapCall("unhighlightRoom")
-    hereVnum = nil
-    hereHash = ""
-    pendingCmd = nil
+    whereAt.vnum = nil
+    whereAt.hash = ""
+    pend.cmd = nil
 end
 
 function cleanup()

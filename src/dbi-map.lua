@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-map",
     name        = "DB Infinity Scouter",
-    version     = "2026.08.15.000",
+    version     = "2026.08.16.000",
     author      = "Solao",
     description = "Dragonball Infinity's GMCP map, rendered as a scouter readout.",
     settings    = { saveState = true },
@@ -44,21 +44,35 @@ local tickTimer = nil
 -- All of these follow the lens. They used to be green constants, so choosing a
 -- blue lens turned the glyphs blue and left the frame, the glow, the scanlines
 -- and the lit buttons green around them.
-local LENS_DEEP  = "#03100a"
-local LENS_FILL  = "#071d12"
-local LENS_DEEP_RGB = "3,16,10"
-local LENS_FILL_RGB = "7,29,18"
+-- The scouter lens: the colours of each, the list of them, which one is on,
+-- whether it just changed and what it is subscribed to. Eleven file-scope
+-- locals about one piece of glass.
+--
+-- Called 'glass' because 'lens' is bound elsewhere in this file.
+local glass = {}
+
+glass.DEEP  = "#03100a"
+glass.FILL  = "#071d12"
+glass.DEEP_RGB = "3,16,10"
+glass.FILL_RGB = "7,29,18"
 
 -- the edge colour as 'r,g,b', for every rgba() the panel composes
-local LENS_RGB   = "37,255,136"
+glass.RGB   = "37,255,136"
 -- two darker steps of it, for the frame's gradient
-local LENS_MID   = "#0b6b3a"
-local LENS_DARK  = "#04241a"
+glass.MID   = "#0b6b3a"
+glass.DARK  = "#04241a"
 
 -- 1 is the solid scouter; 0 leaves the glyphs and the frame over whatever is
 -- behind the widget, so the panel can sit on top of the main output and the
 -- text underneath stays readable.
-local panelAlpha = 1
+-- The panel: its widget, its measured size, the grid it draws on, the font
+-- and the character cell, the paddings and the toggles.
+--
+-- Twenty-two file-scope locals for one subject, which is a ninth of Lua's
+-- 200-per-chunk budget spent on describing one box.
+local ui = {}
+
+ui.alpha = 1
 -- The lens.
 --
 -- Green because that is what a scouter looks like, but this MUD colours its own
@@ -71,7 +85,7 @@ local panelAlpha = 1
 -- them needs hex arithmetic, and tonumber(s, 16) does not read hex in this
 -- runtime -- see sharp edge 19, which cost the mapper four releases. Written
 -- out, there is nothing to get wrong.
-local LENSES = {
+glass.ALL = {
     green  = { edge = "#25ff88", lit = "#7dffb0", dim = "#2f7a52" },
     blue   = { edge = "#3aa0ff", lit = "#8fc8ff", dim = "#2c5c8a" },
     cyan   = { edge = "#25f0ff", lit = "#8ff4ff", dim = "#2a7480" },
@@ -87,7 +101,11 @@ local LENSES = {
 -- Hex a digit at a time. tonumber(s, 16) ignores the base in this runtime and
 -- behaves as Number(s), so "ff" comes back NaN and NaN is truthy -- sharp edge
 -- 19, which cost the mapper four releases before it was found.
-local HEXVAL = {
+-- The palette, and the hex table that reads it. Nine file-scope locals for
+-- one set of colours.
+local hue = {}
+
+hue.HEX = {
     ["0"] = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3, ["4"] = 4,
     ["5"] = 5, ["6"] = 6, ["7"] = 7, ["8"] = 8, ["9"] = 9,
     ["a"] = 10, ["b"] = 11, ["c"] = 12, ["d"] = 13, ["e"] = 14, ["f"] = 15,
@@ -95,8 +113,8 @@ local HEXVAL = {
 
 local function hexPair(t)
     if type(t) ~= "string" or #t ~= 2 then return nil end
-    local hi = HEXVAL[t:sub(1, 1):lower()]
-    local lo = HEXVAL[t:sub(2, 2):lower()]
+    local hi = hue.HEX[t:sub(1, 1):lower()]
+    local lo = hue.HEX[t:sub(2, 2):lower()]
     if hi == nil or lo == nil then return nil end
     return hi * 16 + lo
 end
@@ -127,73 +145,73 @@ local function darken(hex, f)
         .. twoDigit(math.floor(g * f)) .. twoDigit(math.floor(b * f))
 end
 
-local lens       = "green"
+glass.cur       = "green"
 -- Raised when a line changed the lens. readComms sits four hundred lines above
 -- applyLens and saveSettings, so it cannot call either; handleLine can, and
 -- does, on the way back out.
-local lensJustChanged = false
-local PHOSPHOR   = LENSES.green.lit
-local PHOS_DIM   = LENSES.green.dim
-local EDGE       = LENSES.green.edge
+glass.justChanged = false
+hue.PHOSPHOR   = glass.ALL.green.lit
+hue.PHOS_DIM   = glass.ALL.green.dim
+hue.EDGE       = glass.ALL.green.edge
 
 -- Reassigns the three the stylesheet reads. chromeCss() builds on every render,
 -- so the next paint is the new colour and nothing has to be threaded through.
 local function setLens(name)
-    local pick = LENSES[tostring(name or ""):lower()]
+    local pick = glass.ALL[tostring(name or ""):lower()]
     if not pick then return false end
 
-    lens     = tostring(name):lower()
-    PHOSPHOR = pick.lit
-    PHOS_DIM = pick.dim
-    EDGE     = pick.edge
+    glass.cur     = tostring(name):lower()
+    hue.PHOSPHOR = pick.lit
+    hue.PHOS_DIM = pick.dim
+    hue.EDGE     = pick.edge
 
     local r, g, b = hexRgb(pick.edge)
-    if r then LENS_RGB = r .. "," .. g .. "," .. b end
+    if r then glass.RGB = r .. "," .. g .. "," .. b end
 
-    LENS_MID  = darken(pick.edge, 0.42)
-    LENS_DARK = darken(pick.edge, 0.14)
+    glass.MID  = darken(pick.edge, 0.42)
+    glass.DARK = darken(pick.edge, 0.14)
 
     -- the glass itself: nearly black, with the lens in it
-    LENS_DEEP = darken(pick.edge, 0.06)
-    LENS_FILL = darken(pick.edge, 0.11)
+    glass.DEEP = darken(pick.edge, 0.06)
+    glass.FILL = darken(pick.edge, 0.11)
 
-    local dr, dg, db = hexRgb(LENS_DEEP)
-    if dr then LENS_DEEP_RGB = dr .. "," .. dg .. "," .. db end
-    local fr, fg, fb = hexRgb(LENS_FILL)
-    if fr then LENS_FILL_RGB = fr .. "," .. fg .. "," .. fb end
+    local dr, dg, db = hexRgb(glass.DEEP)
+    if dr then glass.DEEP_RGB = dr .. "," .. dg .. "," .. db end
+    local fr, fg, fb = hexRgb(glass.FILL)
+    if fr then glass.FILL_RGB = fr .. "," .. fg .. "," .. fb end
     return true
 end
-local KI_BLUE    = "#4fc3ff"
-local ALERT      = "#ff8a3d"
-local READOUT    = "#ffd24a"     -- the scouter's own readout, over the map
-local READOUT_HI = "#fff2b0"
+hue.KI_BLUE    = "#4fc3ff"
+hue.ALERT      = "#ff8a3d"
+hue.READOUT    = "#ffd24a"     -- the scouter's own readout, over the map
+hue.READOUT_HI = "#fff2b0"
 
-local widget = nil
+ui.id = nil
 -- Fitting, matching the house arithmetic: a monospace advance is near enough
 -- 0.60em on every stack that matters, and the line height is set explicitly
 -- below so it is not a guess. measureText is canvas-only and this is HTML.
-local CH_W, CH_H = 0.60, 1.15
-local FS_MIN, FS_MAX = 6, 34
-local PAD = 10
-local BAR_H = 22
+ui.CH_W, ui.CH_H = 0.60, 1.15
+ui.FS_MIN, ui.FS_MAX = 6, 34
+ui.PAD = 10
+ui.BAR_H = 22
 
 -- A size you asked for, which beats the fitted one. Fitting can only answer
 -- "as large as will go", and a dense map read at a glance beats a big one you
 -- have to look across. 0 means fit.
-local zoom = 0
-local panelW = 460
-local panelH = 320
+ui.zoom = 0
+ui.w = 460
+ui.h = 320
 
 -- The panel follows the terminal's own font rather than dictating one. Read
 -- each render so a change in settings is picked up without a reload; the stack
 -- behind it is the fallback for when the call is unavailable.
-local FONT_FALLBACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
-local termFamily = ""
-local termSize = 13
+ui.FALLBACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+ui.family = ""
+ui.size = 13
 
-local fontSize = 13
-local showHeader = true
-local showScan = true
+ui.fontSize = 13
+ui.header = true
+ui.scan = true
 local lastError = "none"
 
 -- owned copies, keyed by map id
@@ -205,28 +223,35 @@ local curDef = nil
 local curSnap = nil
 
 -- what the grid is drawn at, resolved per render
-local gridFont = 13
-local gridCols = 0
-local gridRows = 0
-local lensSub = 22
+ui.gridFont = 13
+ui.cols = 0
+ui.rows = 0
+glass.sub = 22
 
 -- The GMCP map arrives with a one-cell frame drawn into it; the panel has a
 -- frame of its own. mapInset is how many cells of it to drop, resolved per
 -- snapshot by frameInset().
-local stripFrame = true
-local mapInset = 0
+ui.stripFrame = true
+ui.inset = 0
 
 -- The game's own scouter. 'scan <target>' answers with a name, three lines of
 -- ASCII art, and a power level -- or garbage and a malfunction when the target
 -- reads too high. The reading belongs under the map, not in the scroll.
-local scanTarget = ""
-local scanPower = ""
-local scanBroken = false
-local scanPending = 0      -- lines of art still expected after the outline line
-local scanAt = 0           -- os.time() of the reading, for the fade
-local scanAnim = ""        -- the readout's animation rule, rebuilt each render
-local SCAN_STEADY = 10     -- seconds before it starts pulsing
-local SCAN_LIFE = 30       -- seconds before it is gone
+-- A scan in flight and what came back: the target, its power, whether the
+-- scouter is broken, what is pending, when, the animation, the timings and
+-- the hit count.
+--
+-- Called 'sweep' because 'scan' is bound elsewhere in this file.
+local sweep = {}
+
+sweep.target = ""
+sweep.power = ""
+sweep.broken = false
+sweep.pending = 0      -- lines of art still expected after the outline line
+sweep.at = 0           -- os.time() of the reading, for the fade
+sweep.anim = ""        -- the readout's animation rule, rebuilt each render
+sweep.STEADY = 10     -- seconds before it starts pulsing
+sweep.LIFE = 30       -- seconds before it is gone
 
 -- Said once, ever. The plugin needs the server to stop drawing the map into
 -- the stream, and nothing else tells a new user that -- without it this works
@@ -236,22 +261,27 @@ local hintShown = false
 
 local gagArt = true        -- keep the scouter's ASCII art out of the terminal
 local debugOn = false
-local scanHits = 0
+sweep.hits = 0
 
 -- negotiation state machine, driven by the 1s tick
-local negoDone = false
-local negoAttempts = 0
-local negoTick = 0
-local negoNextAt = 0
-local negoConnected = false
-local firstPacketAfter = nil
+-- GMCP negotiation: whether it is done, how many tries, the retry schedule
+-- and its cap, the connection state, and what we introduce ourselves as.
+-- Thirteen file-scope locals for one handshake.
+local nego = {}
+
+nego.done = false
+nego.tries = 0
+nego.tick = 0
+nego.nextAt = 0
+nego.connected = false
+nego.firstPacketAfter = nil
 
 -- 1.5s is the shortest delay that has been reliable after the client finishes
 -- its own negotiation; everything after that is backoff. Eight attempts is
 -- roughly two minutes, which is long enough that a server that has not
 -- answered is not going to.
-local NEGO_SCHEDULE = { 2, 4, 9, 18, 30, 60, 90, 120 }
-local NEGO_MAX = 8
+nego.SCHEDULE = { 2, 4, 9, 18, 30, 60, 90, 120 }
+nego.MAX = 8
 
 -- Core.Hello opens a GMCP session. The spec puts it before any Core.Supports.*
 -- and a server is within its rights to discard whatever arrives ahead of it,
@@ -268,9 +298,9 @@ local NEGO_MAX = 8
 -- If the server turns out to gate the Map module on who is asking, CLIENT is
 -- the one line to change. No API exposes the running client version to a
 -- plugin; 'dbscout api version' enumerates _G if that ever changes.
-local CLIENT = "MudForge"
-local CLIENT_VERSION = "1.2.2035"
-local helloSent = false
+nego.CLIENT = "MudForge"
+nego.CLIENT_VERSION = "1.2.2035"
+nego.helloSent = false
 
 ----------------------------------------------------------------------
 -- value hygiene
@@ -334,7 +364,7 @@ end
 -- A style colour may be a hex string, a CSS colour name, or one of the
 -- protocol's own "ansi.*" names. CSS understands the first two; the third is
 -- ours to translate. Values match the client's MUD palette, not the terminal's.
-local ANSI_NAMES = {
+hue.ANSI = {
     ["ansi.black"]          = "#000000", ["ansi.red"]            = "#800000",
     ["ansi.green"]          = "#008000", ["ansi.yellow"]         = "#808000",
     ["ansi.blue"]           = "#000080", ["ansi.magenta"]        = "#800080",
@@ -354,7 +384,7 @@ end
 
 local function cssColor(v, fallback)
     if not isColor(v) then return fallback end
-    local named = ANSI_NAMES[v:lower()]
+    local named = hue.ANSI[v:lower()]
     if named then return named end
     return v
 end
@@ -646,8 +676,8 @@ local function styleCss(def)
         local bg = cssColor(st.bg, nil)
         if st.reverse == true then
             local swap = fg
-            fg = cssColor(bg, LENS_DEEP)
-            bg = cssColor(swap, PHOSPHOR)
+            fg = cssColor(bg, glass.DEEP)
+            bg = cssColor(swap, hue.PHOSPHOR)
         end
 
         local rule = ""
@@ -682,35 +712,35 @@ local function readTerminalFont()
 
     if type(f.family) == "string" and f.family ~= "" then
         -- it lands in a stylesheet, so it cannot be allowed to close a rule
-        termFamily = f.family:gsub("[;}<>]", "")
+        ui.family = f.family:gsub("[;}<>]", "")
     end
 
     local n = safeNum(f.size)
-    if n and n >= 6 and n <= 72 then termSize = math.floor(n) end
+    if n and n >= 6 and n <= 72 then ui.size = math.floor(n) end
 end
 
 local function chromeFont()
-    if termFamily ~= "" then return termFamily .. "," .. FONT_FALLBACK end
-    return FONT_FALLBACK
+    if ui.family ~= "" then return ui.family .. "," .. ui.FALLBACK end
+    return ui.FALLBACK
 end
 
 -- chrome sizes as ratios of the terminal's, with floors so a tiny terminal
 -- font does not make the buttons unreadable
-local function barSize()  return math.max(7, math.floor(termSize * 0.60)) end
-local function scanSize() return math.max(9, math.floor(termSize * 0.85)) end
-local function idleSize() return math.max(9, math.floor(termSize * 0.80)) end
+local function barSize()  return math.max(7, math.floor(ui.size * 0.60)) end
+local function scanSize() return math.max(9, math.floor(ui.size * 0.85)) end
+local function idleSize() return math.max(9, math.floor(ui.size * 0.80)) end
 
 local function fitFontSize(cols, rows)
-    if zoom > 0 then return zoom end
-    if cols < 1 or rows < 1 then return fontSize end
+    if ui.zoom > 0 then return ui.zoom end
+    if cols < 1 or rows < 1 then return ui.fontSize end
 
-    local availW = panelW - PAD * 2
-    local availH = panelH - PAD * 2
-    if showHeader then availH = availH - BAR_H end
-    if availW < 1 or availH < 1 then return FS_MIN end
+    local availW = ui.w - ui.PAD * 2
+    local availH = ui.h - ui.PAD * 2
+    if ui.header then availH = availH - ui.BAR_H end
+    if availW < 1 or availH < 1 then return ui.FS_MIN end
 
-    local fs = math.floor(math.min(availW / (cols * CH_W), availH / (rows * CH_H)))
-    return math.max(FS_MIN, math.min(FS_MAX, fs))
+    local fs = math.floor(math.min(availW / (cols * ui.CH_W), availH / (rows * ui.CH_H)))
+    return math.max(ui.FS_MIN, math.min(ui.FS_MAX, fs))
 end
 
 -- Rules only, no <style> wrapper. render() emits one tag around all three
@@ -718,17 +748,17 @@ end
 -- tag, where the browser rendered them as text across the top of the panel.
 local function chromeCss()
     local scan = ""
-    if showScan then
+    if ui.scan then
         scan = ".dbi-map .lens::after{content:'';position:absolute;inset:0;pointer-events:none;"
-            .. "background:repeating-linear-gradient(180deg," .. "rgba(" .. LENS_RGB .. ",0.07)" .. " 0 1px,transparent 1px 4px);}"
+            .. "background:repeating-linear-gradient(180deg," .. "rgba(" .. glass.RGB .. ",0.07)" .. " 0 1px,transparent 1px 4px);}"
     end
 
     -- Everything the panel paints scales with alpha, so "transparent" means
     -- the terminal behind it is actually readable rather than merely tinted.
-    local a = panelAlpha
-    local fill = "rgba(" .. LENS_FILL_RGB .. "," .. (a * 0.92) .. ")"
-    local deep = "rgba(" .. LENS_DEEP_RGB .. "," .. a .. ")"
-    local lensFill = "rgba(" .. LENS_FILL_RGB .. "," .. (a * 0.55) .. ")"
+    local a = ui.alpha
+    local fill = "rgba(" .. glass.FILL_RGB .. "," .. (a * 0.92) .. ")"
+    local deep = "rgba(" .. glass.DEEP_RGB .. "," .. a .. ")"
+    local lensFill = "rgba(" .. glass.FILL_RGB .. "," .. (a * 0.55) .. ")"
 
     -- Fit by measuring the box in CSS rather than asking the client, which
     -- reported 300x200 for a panel that was nothing of the sort. 100cqw/100cqh
@@ -736,11 +766,11 @@ local function chromeCss()
     -- an engine without container queries; a parser that understands the second
     -- declaration overrides with it, one that does not keeps the first.
     local fitRule = ""
-    if gridCols > 0 and gridRows > 0 then
-        fitRule = "font-size:clamp(" .. FS_MIN .. "px,min("
-            .. "calc(100cqw / " .. (gridCols * CH_W) .. "),"
-            .. "calc(100cqh / " .. (gridRows * CH_H) .. ")),"
-            .. FS_MAX .. "px);"
+    if ui.cols > 0 and ui.rows > 0 then
+        fitRule = "font-size:clamp(" .. ui.FS_MIN .. "px,min("
+            .. "calc(100cqw / " .. (ui.cols * ui.CH_W) .. "),"
+            .. "calc(100cqh / " .. (ui.rows * ui.CH_H) .. ")),"
+            .. ui.FS_MAX .. "px);"
     end
 
     -- .dbi-map is a container so the bar can query it; .lens is a separate one
@@ -753,23 +783,23 @@ local function chromeCss()
     return ".dbi-map{position:relative;height:100%;box-sizing:border-box;padding:8px;"
         .. "display:flex;flex-direction:column;container-type:inline-size;"
         .. "background:radial-gradient(120% 90% at 50% 0%," .. fill .. " 0%," .. deep .. " 70%);"
-        .. "color:" .. PHOSPHOR .. ";overflow:hidden;"
+        .. "color:" .. hue.PHOSPHOR .. ";overflow:hidden;"
         .. "font-family:" .. chromeFont() .. ";}"
 
         -- nowrap with everything shrinkable except the buttons: the readout
         -- used to be nowrap with no shrink, which shoved 'hide' off the edge
         .. ".dbi-map .bar{flex:0 0 auto;display:flex;align-items:center;gap:4px;margin-bottom:6px;"
         .. "height:" .. (barSize() + 8) .. "px;"
-        .. "font-size:" .. barSize() .. "px;letter-spacing:0.12em;text-transform:uppercase;color:" .. EDGE .. ";}"
+        .. "font-size:" .. barSize() .. "px;letter-spacing:0.12em;text-transform:uppercase;color:" .. hue.EDGE .. ";}"
         .. ".dbi-map .bar .ttl{flex:1 1 auto;min-width:0;overflow:hidden;"
         .. "text-overflow:ellipsis;white-space:nowrap;}"
         .. ".dbi-map .bar .rd{flex:0 1 auto;min-width:0;overflow:hidden;"
-        .. "text-overflow:ellipsis;white-space:nowrap;color:" .. PHOS_DIM .. ";}"
+        .. "text-overflow:ellipsis;white-space:nowrap;color:" .. hue.PHOS_DIM .. ";}"
         .. ".dbi-map .tb{flex:0 0 auto;font-size:" .. barSize() .. "px;letter-spacing:0.1em;text-transform:uppercase;"
-        .. "padding:2px 5px;border-radius:2px;border:1px solid " .. PHOS_DIM .. ";color:" .. PHOS_DIM .. ";"
+        .. "padding:2px 5px;border-radius:2px;border:1px solid " .. hue.PHOS_DIM .. ";color:" .. hue.PHOS_DIM .. ";"
         .. "cursor:pointer;user-select:none;white-space:nowrap;}"
-        .. ".dbi-map .tb:hover{color:" .. PHOSPHOR .. ";border-color:" .. EDGE .. ";}"
-        .. ".dbi-map .tb.on{color:" .. EDGE .. ";border-color:" .. EDGE .. ";background:rgba(" .. LENS_RGB .. ",0.12);}"
+        .. ".dbi-map .tb:hover{color:" .. hue.PHOSPHOR .. ";border-color:" .. hue.EDGE .. ";}"
+        .. ".dbi-map .tb.on{color:" .. hue.EDGE .. ";border-color:" .. hue.EDGE .. ";background:rgba(" .. glass.RGB .. ",0.12);}"
         -- narrow panel: the readout is the first thing to go, then the title.
         -- The buttons never go, because they are the only way to work the panel.
         .. "@container (max-width:260px){.dbi-map .bar .rd{display:none;}}"
@@ -779,12 +809,12 @@ local function chromeCss()
         .. "margin-bottom:6px;flex-wrap:nowrap;overflow:hidden;}"
         -- the channel reads like the rest of the readout, not like a web form
         .. ".dbi-map .cm input{flex:1 1 auto;min-width:0;box-sizing:border-box;"
-        .. "background-color:rgba(0,0,0,0.5);color:" .. PHOSPHOR .. ";"
+        .. "background-color:rgba(0,0,0,0.5);color:" .. hue.PHOSPHOR .. ";"
         .. "font:inherit;font-size:" .. barSize() .. "px;letter-spacing:0.16em;"
-        .. "text-align:center;border:1px solid " .. PHOS_DIM .. ";"
+        .. "text-align:center;border:1px solid " .. hue.PHOS_DIM .. ";"
         .. "border-radius:2px;padding:2px 4px;}"
-        .. ".dbi-map .cm input:focus{outline:none;border-color:" .. EDGE .. ";"
-        .. "color:" .. EDGE .. ";}"
+        .. ".dbi-map .cm input:focus{outline:none;border-color:" .. hue.EDGE .. ";"
+        .. "color:" .. hue.EDGE .. ";}"
         -- a button carries the browser's own chrome unless it is taken off
         .. ".dbi-map .cm button{margin:0;background:none;appearance:none;"
         .. "-webkit-appearance:none;font:inherit;}"
@@ -793,8 +823,8 @@ local function chromeCss()
         -- the padlock and the tick sit on the baseline like the words beside them
         .. ".dbi-map .cm .ic{display:flex;align-items:center;padding:2px 4px;}"
         -- the tick lights while the channel is being edited
-        .. ".dbi-map .cm:focus-within button{color:" .. EDGE .. ";"
-        .. "border-color:" .. EDGE .. ";background:rgba(" .. LENS_RGB .. ",0.12);}"
+        .. ".dbi-map .cm:focus-within button{color:" .. hue.EDGE .. ";"
+        .. "border-color:" .. hue.EDGE .. ";background:rgba(" .. glass.RGB .. ",0.12);}"
         .. "@container (max-width:190px){.dbi-map .bar .ttl{display:none;}}"
 
         -- the readout itself: clipped corners give it the scouter lens outline
@@ -804,34 +834,34 @@ local function chromeCss()
         -- what keeps it legible there.
         .. ".dbi-map .scan{position:absolute;left:0;right:0;bottom:0;z-index:2;"
         .. "padding:6px 10px;font-size:" .. scanSize() .. "px;line-height:1.35;letter-spacing:0.04em;"
-        .. "color:" .. READOUT .. ";pointer-events:none;"
+        .. "color:" .. hue.READOUT .. ";pointer-events:none;"
         .. "text-shadow:0 0 5px rgba(0,0,0,0.95),0 0 2px rgba(0,0,0,1);}"
         .. ".dbi-map .scan .ln{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}"
         .. "@keyframes dbiPulse{0%,100%{opacity:1}50%{opacity:0.30}}"
         .. "@keyframes dbiOut{from{opacity:1}to{opacity:0;visibility:hidden}}"
-        .. ".dbi-map .scan .val{color:" .. READOUT_HI .. ";}"
-        .. ".dbi-map .scan .val.bad{color:" .. ALERT .. ";}"
+        .. ".dbi-map .scan .val{color:" .. hue.READOUT_HI .. ";}"
+        .. ".dbi-map .scan .val.bad{color:" .. hue.ALERT .. ";}"
 
         .. ".dbi-map .lens{position:relative;flex:1 1 auto;min-height:0;overflow:auto;"
         .. "container-type:size;"
         .. "display:flex;align-items:center;justify-content:center;"
-        .. "border:1px solid rgba(" .. LENS_RGB .. ",0.28);"
+        .. "border:1px solid rgba(" .. glass.RGB .. ",0.28);"
         .. "clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);"
-        .. "background:" .. lensFill .. ";box-shadow:inset 0 0 22px rgba(" .. LENS_RGB .. ",0.10);}"
+        .. "background:" .. lensFill .. ";box-shadow:inset 0 0 22px rgba(" .. glass.RGB .. ",0.10);}"
         .. ".dbi-map .grid{margin:0;padding:0;white-space:pre;font:inherit;"
-        .. "line-height:" .. CH_H .. ";font-size:" .. gridFont .. "px;" .. fitRule .. "}"
+        .. "line-height:" .. ui.CH_H .. ";font-size:" .. ui.gridFont .. "px;" .. fitRule .. "}"
 
         -- targeting brackets, drawn rather than shipped as art
         .. ".dbi-map .br{position:absolute;width:12px;height:12px;pointer-events:none;"
-        .. "border-color:" .. EDGE .. ";opacity:0.75;}"
+        .. "border-color:" .. hue.EDGE .. ";opacity:0.75;}"
         .. ".dbi-map .br.tl{top:2px;left:2px;border-top:2px solid;border-left:2px solid;}"
         .. ".dbi-map .br.tr{top:2px;right:2px;border-top:2px solid;border-right:2px solid;}"
         .. ".dbi-map .br.bl{bottom:2px;left:2px;border-bottom:2px solid;border-left:2px solid;}"
         .. ".dbi-map .br.br2{bottom:2px;right:2px;border-bottom:2px solid;border-right:2px solid;}"
 
-        .. ".dbi-map .idle{padding:14px 10px;font-size:" .. idleSize() .. "px;line-height:1.7;color:" .. PHOS_DIM .. ";}"
-        .. ".dbi-map .idle b{color:" .. ALERT .. ";font-weight:600;}"
-        .. ".dbi-map .idle .ki{color:" .. KI_BLUE .. ";}"
+        .. ".dbi-map .idle{padding:14px 10px;font-size:" .. idleSize() .. "px;line-height:1.7;color:" .. hue.PHOS_DIM .. ";}"
+        .. ".dbi-map .idle b{color:" .. hue.ALERT .. ";font-weight:600;}"
+        .. ".dbi-map .idle .ki{color:" .. hue.KI_BLUE .. ";}"
         .. scan
 end
 
@@ -921,7 +951,7 @@ local function readComms(clean)
         local got = false
         if want then got = setLens(want) end
         if not got then setLens("green") end
-        lensJustChanged = true
+        glass.justChanged = true
         return true
     end
 
@@ -1004,7 +1034,7 @@ local function allBorderRuns(list)
 end
 
 local function frameInset(snap, rowN, width)
-    if not stripFrame then return 0 end
+    if not ui.stripFrame then return 0 end
     if rowN < 3 or width < 3 then return 0 end
 
     -- The server names the frame, so ask it rather than matching glyphs: style
@@ -1056,12 +1086,12 @@ end
 
 local function idleBody()
     local state = "negotiating"
-    if negoDone then state = "listening"
-    elseif negoAttempts >= NEGO_MAX then state = "no answer" end
+    if nego.done then state = "listening"
+    elseif nego.tries >= nego.MAX then state = "no answer" end
 
     return '<div class="idle">'
         .. "no reading yet<br><br>"
-        .. "gmcp: <b>" .. state .. "</b> (" .. negoAttempts .. "/" .. NEGO_MAX .. ")<br>"
+        .. "gmcp: <b>" .. state .. "</b> (" .. nego.tries .. "/" .. nego.MAX .. ")<br>"
         .. "capture: waiting for a map to scroll past<br><br>"
         .. "move a room and it should fill in<br><br>"
         .. "if the map is in your output instead, run<br>"
@@ -1075,7 +1105,7 @@ local function mapBody()
     if height < 1 or height > curSnap.rowN then height = curSnap.rowN end
     local width = math.floor(numOr(curDef.width, 0))
 
-    local inset = mapInset
+    local inset = ui.inset
     local innerWidth = width - inset * 2
     if innerWidth < 1 then
         innerWidth = width
@@ -1099,7 +1129,7 @@ local function mapBody()
 end
 
 local function render()
-    if not widget then return end
+    if not ui.id then return end
 
     -- Fit first: chromeCss reads gridFont when it builds the grid rule.
     local cols, rows = 0, 0
@@ -1107,33 +1137,33 @@ local function render()
         local w = math.floor(numOr(curDef.width, 0))
         local h = math.floor(numOr(curDef.height, curSnap.rowN))
         if h < 1 or h > curSnap.rowN then h = curSnap.rowN end
-        mapInset = frameInset(curSnap, h, w)
-        cols = w - mapInset * 2
-        rows = h - mapInset * 2
+        ui.inset = frameInset(curSnap, h, w)
+        cols = w - ui.inset * 2
+        rows = h - ui.inset * 2
     end
-    gridCols = cols
-    gridRows = rows
+    ui.cols = cols
+    ui.rows = rows
 
     readTerminalFont()
 
     -- Only the bar takes height off the lens now; the readout is pinned inside
     -- it and overlays the map instead of shortening it.
-    lensSub = 0
-    if showHeader then lensSub = lensSub + barSize() + 14 end
+    glass.sub = 0
+    if ui.header then glass.sub = glass.sub + barSize() + 14 end
 
-    gridFont = fitFontSize(cols, rows)
+    ui.gridFont = fitFontSize(cols, rows)
 
     local head = ""
-    if showHeader then
+    if ui.header then
         local title = "Scouter"
         local readout = "no signal"
         if curDef then title = curDef.title end
         -- short: this is the first thing squeezed out on a narrow panel
         if curSnap then
-            readout = gridCols .. "x" .. gridRows .. " s" .. tostring(curSnap.sequence or "-")
+            readout = ui.cols .. "x" .. ui.rows .. " s" .. tostring(curSnap.sequence or "-")
         end
         local scanOn = ""
-        if showScan then scanOn = " on" end
+        if ui.scan then scanOn = " on" end
         head = '<div class="bar"><span class="ttl">' .. escapeHtml(title) .. "</span>"
             .. '<span class="rd">' .. escapeHtml(readout) .. "</span>"
             .. '<span class="tb" data-mud-action="smaller">&minus;</span>'
@@ -1148,11 +1178,11 @@ local function render()
     end
 
     local scanHtml = ""
-    scanAnim = ""
-    local age = os.time() - scanAt
-    if scanTarget ~= "" and age < SCAN_LIFE then
+    sweep.anim = ""
+    local age = os.time() - sweep.at
+    if sweep.target ~= "" and age < sweep.LIFE then
         local cls = "val"
-        if scanBroken then cls = "val bad" end
+        if sweep.broken then cls = "val bad" end
 
         -- The panel is rebuilt on every map update, so a fresh element would
         -- restart the animation and the readout would never age out while you
@@ -1161,13 +1191,13 @@ local function render()
         -- Into the stylesheet rather than an inline style attribute: the
         -- sanitiser is known to strip inline colour and this is not worth
         -- finding out about the hard way.
-        scanAnim = ".dbi-map .scan{animation:dbiPulse 1.4s ease-in-out "
-            .. (SCAN_STEADY - age) .. "s infinite,"
-            .. "dbiOut 1.2s linear " .. (SCAN_LIFE - 1.2 - age) .. "s forwards;}"
+        sweep.anim = ".dbi-map .scan{animation:dbiPulse 1.4s ease-in-out "
+            .. (sweep.STEADY - age) .. "s infinite,"
+            .. "dbiOut 1.2s linear " .. (sweep.LIFE - 1.2 - age) .. "s forwards;}"
 
         scanHtml = '<div class="scan">'
-            .. '<div class="ln">Target: <span class="val">' .. escapeHtml(scanTarget) .. "</span></div>"
-            .. '<div class="ln">Power: <span class="' .. cls .. '">' .. escapeHtml(scanPower) .. "</span></div>"
+            .. '<div class="ln">Target: <span class="val">' .. escapeHtml(sweep.target) .. "</span></div>"
+            .. '<div class="ln">Power: <span class="' .. cls .. '">' .. escapeHtml(sweep.power) .. "</span></div>"
             .. "</div>"
     end
 
@@ -1252,8 +1282,8 @@ local function render()
             .. ' data-mud-action="comms">scouter display</span></div>'
     end
 
-    setWidgetProperty(widget, "content",
-        "<style>" .. chromeCss() .. styleCss(curDef) .. scanAnim .. "</style>"
+    setWidgetProperty(ui.id, "content",
+        "<style>" .. chromeCss() .. styleCss(curDef) .. sweep.anim .. "</style>"
         .. '<div class="dbi-map">' .. head .. commsHtml
         .. '<div class="lens">' .. inner
         .. '<i class="br tl"></i><i class="br tr"></i><i class="br bl"></i><i class="br br2"></i>'
@@ -1287,10 +1317,10 @@ local function fetchPayload(pkg, field)
 end
 
 local function markAlive()
-    if not negoDone then
-        negoDone = true
-        firstPacketAfter = negoAttempts
-        print(TAG .. "server answered after " .. negoAttempts .. " negotiation attempt(s)")
+    if not nego.done then
+        nego.done = true
+        nego.firstPacketAfter = nego.tries
+        print(TAG .. "server answered after " .. nego.tries .. " negotiation attempt(s)")
     end
 end
 
@@ -1393,31 +1423,31 @@ end
 -- it, the other sees a recent stamp and stays quiet. If both check inside the
 -- same second two Hellos go out, which an idempotent handshake should not
 -- mind, but it is a narrowed race rather than a closed one.
-local HELLO_KEY = "dbi-gmcp-hello"
-local HELLO_WINDOW = 30
+nego.HELLO_KEY = "dbi-gmcp-hello"
+nego.HELLO_WINDOW = 30
 
 local function sendHello(force)
-    helloSent = true
+    nego.helloSent = true
 
     if not force then
-        local last = safeNum(getVariable(HELLO_KEY, "global"))
+        local last = safeNum(getVariable(nego.HELLO_KEY, "global"))
         local now = os.time()
-        if last and (now - last) < HELLO_WINDOW then
+        if last and (now - last) < nego.HELLO_WINDOW then
             if debugOn then print(TAG .. "hello already sent by another plugin") end
             return
         end
     end
 
-    setVariable(HELLO_KEY, tostring(os.time()), "global")
+    setVariable(nego.HELLO_KEY, tostring(os.time()), "global")
     -- Two-arg form: the client JSON-encodes the table. Hand-building the wire
     -- string meant hand-building its quoting and escaping too, which is a
     -- source of bugs for no gain.
-    sendGMCP("Core.Hello", { client = CLIENT, version = CLIENT_VERSION })
+    sendGMCP("Core.Hello", { client = nego.CLIENT, version = nego.CLIENT_VERSION })
 end
 
 local function sendSupports()
-    if not helloSent then sendHello() end
-    negoAttempts = negoAttempts + 1
+    if not nego.helloSent then sendHello() end
+    nego.tries = nego.tries + 1
     -- An array table encodes to ["Map 1"], which is what the option list is.
     sendGMCP("Core.Supports.Add", { "Map 1" })
 end
@@ -1440,27 +1470,27 @@ end
 
 local function armNegotiation(why)
     claimGmcp()
-    negoDone = false
-    negoAttempts = 0
-    negoTick = 0
-    negoNextAt = NEGO_SCHEDULE[1]
-    firstPacketAfter = nil
+    nego.done = false
+    nego.tries = 0
+    nego.tick = 0
+    nego.nextAt = nego.SCHEDULE[1]
+    nego.firstPacketAfter = nil
     print(TAG .. "negotiation armed (" .. why .. ")")
 end
 
 local function negotiationTick()
-    if not negoConnected then return end
-    if negoDone then return end
-    if negoAttempts >= NEGO_MAX then return end
+    if not nego.connected then return end
+    if nego.done then return end
+    if nego.tries >= nego.MAX then return end
 
-    negoTick = negoTick + 1
-    if negoTick < negoNextAt then return end
+    nego.tick = nego.tick + 1
+    if nego.tick < nego.nextAt then return end
 
     sendSupports()
 
-    local nextGap = NEGO_SCHEDULE[negoAttempts + 1]
+    local nextGap = nego.SCHEDULE[nego.tries + 1]
     if nextGap == nil then nextGap = 120 end
-    negoNextAt = negoTick + nextGap
+    nego.nextAt = nego.tick + nextGap
 
     -- A definition may already be sitting in the store from before we
     -- subscribed; sweep it rather than waiting for the next push.
@@ -1469,7 +1499,7 @@ local function negotiationTick()
     local s = fetchPayload("Map.Snapshot", "Snapshot")
     if s then acceptSnapshot(s) end
 
-    if not negoDone then safeRender() end
+    if not nego.done then safeRender() end
 end
 
 ----------------------------------------------------------------------
@@ -1477,22 +1507,22 @@ end
 ----------------------------------------------------------------------
 
 local function saveSettings()
-    setVariable("fontSize", tostring(fontSize))
-    setVariable("showHeader", showHeader and "yes" or "no")
-    setVariable("showScan", showScan and "yes" or "no")
+    setVariable("fontSize", tostring(ui.fontSize))
+    setVariable("showHeader", ui.header and "yes" or "no")
+    setVariable("showScan", ui.scan and "yes" or "no")
     setVariable("gagArt", gagArt and "yes" or "no")
-    setVariable("zoom", tostring(zoom))
-    setVariable("panelAlpha", tostring(panelAlpha))
-    setVariable("stripFrame", stripFrame and "yes" or "no")
-    setVariable("lens", lens)
+    setVariable("zoom", tostring(ui.zoom))
+    setVariable("panelAlpha", tostring(ui.alpha))
+    setVariable("stripFrame", ui.stripFrame and "yes" or "no")
+    setVariable("lens", glass.cur)
 end
 
 -- The frame fill is the client's, the lens fill is ours; both have to move
 -- together or a "transparent" panel still has an opaque box behind it.
 local function applyAlpha()
-    if not widget then return end
+    if not ui.id then return end
     pcall(function()
-        setWidgetAppearance(widget, { backgroundOpacity = panelAlpha })
+        setWidgetAppearance(ui.id, { backgroundOpacity = ui.alpha })
     end)
 end
 
@@ -1500,14 +1530,14 @@ end
 -- touch it: changing the lens left a green border and a green glow round a blue
 -- panel until this put them back in step.
 local function applyLens()
-    if not widget then return end
+    if not ui.id then return end
     pcall(function()
-        setWidgetAppearance(widget, {
-            borderColor    = EDGE,
-            borderGradient = "linear-gradient(135deg," .. EDGE .. ","
-                .. LENS_MID .. " 65%," .. LENS_DARK .. ")",
-            borderShadow   = "0 0 20px 3px rgba(" .. LENS_RGB .. ",0.30)",
-            backgroundColor = LENS_DEEP,
+        setWidgetAppearance(ui.id, {
+            borderColor    = hue.EDGE,
+            borderGradient = "linear-gradient(135deg," .. hue.EDGE .. ","
+                .. glass.MID .. " 65%," .. glass.DARK .. ")",
+            borderShadow   = "0 0 20px 3px rgba(" .. glass.RGB .. ",0.30)",
+            backgroundColor = glass.DEEP,
         })
     end)
 end
@@ -1517,15 +1547,15 @@ end
 -- that nothing on screen was reading -- the buttons "worked" and did nothing.
 -- Setting zoom suppresses the fit rule, which is what makes the size stick.
 local function bumpFont(delta)
-    local base = zoom
-    if base == 0 then base = gridFont end
-    zoom = math.max(FS_MIN, math.min(FS_MAX, base + delta))
+    local base = ui.zoom
+    if base == 0 then base = ui.gridFont end
+    ui.zoom = math.max(ui.FS_MIN, math.min(ui.FS_MAX, base + delta))
     saveSettings()
     safeRender()
 end
 
 local function makeWidget()
-    widget = createWidget({
+    ui.id = createWidget({
         type     = "html",
         name     = "scouter",
         title    = "Scouter",
@@ -1537,40 +1567,40 @@ local function makeWidget()
             autoHideSettingsCog = true,
         },
     })
-    setWidgetAppearance(widget, {
-        backgroundColor   = LENS_DEEP,
-        backgroundOpacity = panelAlpha,
-        borderColor     = EDGE,
+    setWidgetAppearance(ui.id, {
+        backgroundColor   = glass.DEEP,
+        backgroundOpacity = ui.alpha,
+        borderColor     = hue.EDGE,
         borderWidth     = 2,
         borderRadius    = 10,
-        borderGradient  = "linear-gradient(135deg," .. EDGE .. "," .. LENS_MID .. " 65%," .. LENS_DARK .. ")",
-        borderShadow    = "0 0 20px 3px rgba(" .. LENS_RGB .. ",0.30)",
+        borderGradient  = "linear-gradient(135deg," .. hue.EDGE .. "," .. glass.MID .. " 65%," .. glass.DARK .. ")",
+        borderShadow    = "0 0 20px 3px rgba(" .. glass.RGB .. ",0.30)",
     })
 
     -- registerWidgetEvent APPENDS, so a plugin reload would stack a second
     -- handler on the same widget and every click would fire twice. Dropping
     -- first is cheap; the call is wrapped because it is not in the API doc.
-    pcall(function() unregisterWidgetEvent(widget, "action") end)
-    pcall(function() unregisterWidgetEvent(widget, "resize") end)
+    pcall(function() unregisterWidgetEvent(ui.id, "action") end)
+    pcall(function() unregisterWidgetEvent(ui.id, "resize") end)
 
     -- Seed the panel size so the first fit is against the real widget rather
     -- than the defaults. 3 and 4 are current width and height.
-    local w0 = safeNum(widgetInfo(widget, 3))
-    local h0 = safeNum(widgetInfo(widget, 4))
-    if w0 and w0 > 0 then panelW = w0 end
-    if h0 and h0 > 0 then panelH = h0 end
+    local w0 = safeNum(widgetInfo(ui.id, 3))
+    local h0 = safeNum(widgetInfo(ui.id, 4))
+    if w0 and w0 > 0 then ui.w = w0 end
+    if h0 and h0 > 0 then ui.h = h0 end
 
-    registerWidgetEvent(widget, "resize", function(e)
+    registerWidgetEvent(ui.id, "resize", function(e)
         if type(e) ~= "table" then return end
         local w = safeNum(e.width)
         local h = safeNum(e.height)
-        if w and w > 0 then panelW = w end
-        if h and h > 0 then panelH = h end
+        if w and w > 0 then ui.w = w end
+        if h and h > 0 then ui.h = h end
         safeRender()
     end)
 
-    pcall(function() unregisterWidgetEvent(widget, "submit") end)
-    registerWidgetEvent(widget, "submit", function(data)
+    pcall(function() unregisterWidgetEvent(ui.id, "submit") end)
+    registerWidgetEvent(ui.id, "submit", function(data)
         if type(data) ~= "table" or type(data.formData) ~= "table" then return end
 
         local want = trimBoth(tostring(data.formData.freq or ""))
@@ -1587,7 +1617,7 @@ local function makeWidget()
         send(CMD_SHOW)
     end)
 
-    registerWidgetEvent(widget, "action", function(data)
+    registerWidgetEvent(ui.id, "action", function(data)
         if type(data) ~= "table" then return end
         local act = tostring(data.action or "")
 
@@ -1609,7 +1639,7 @@ local function makeWidget()
         end
 
         if act == "scan" then
-            showScan = not showScan
+            ui.scan = not ui.scan
             saveSettings()
             safeRender()
         elseif act == "bigger" then
@@ -1617,7 +1647,7 @@ local function makeWidget()
         elseif act == "smaller" then
             bumpFont(-1)
         elseif act == "close" then
-            hideWidget(widget)
+            hideWidget(ui.id)
         end
     end)
 
@@ -1646,30 +1676,30 @@ local function handleScan(clean)
         -- both correctly, so the harness could never have caught it.
         local name = clean:match("around (.+) in your vision")
         if name then
-            scanTarget = trimBoth(name)
+            sweep.target = trimBoth(name)
         else
-            scanTarget = trimBoth(clean:match("around (.+)$") or "")
+            sweep.target = trimBoth(clean:match("around (.+)$") or "")
         end
-        scanPower = "reading"
-        scanBroken = false
-        scanPending = 4
-        scanAt = os.time()
-        scanHits = scanHits + 1
-        if debugOn then print(TAG .. "scan target <" .. scanTarget .. ">") end
+        sweep.power = "reading"
+        sweep.broken = false
+        sweep.pending = 4
+        sweep.at = os.time()
+        sweep.hits = sweep.hits + 1
+        if debugOn then print(TAG .. "scan target <" .. sweep.target .. ">") end
         safeRender()
         return true
     end
 
-    if scanPending <= 0 then return nil end
+    if sweep.pending <= 0 then return nil end
 
     local arrowAt = clean:find(ARROW, 1, true)
     if arrowAt then
         -- everything past the last '>' of the arrow
         local value = trimBoth(clean:match(">%s*(.*)$") or "")
-        scanBroken = value:find(MALFUNCTION, 1, true) ~= nil
-        if scanBroken then scanPower = "malfunction" else scanPower = value end
-        scanPending = 0
-        scanAt = os.time()
+        sweep.broken = value:find(MALFUNCTION, 1, true) ~= nil
+        if sweep.broken then sweep.power = "malfunction" else sweep.power = value end
+        sweep.pending = 0
+        sweep.at = os.time()
 
         -- Published where another plugin can read it. This line is gagged --
         -- handleScan returns false for it so the art never reaches the scroll --
@@ -1679,13 +1709,13 @@ local function handleScan(clean)
         --
         -- '~' and not '|': a bare bar is alternation once a pattern is
         -- translated, and splitting on one has cost a release already.
-        if not scanBroken then
+        if not sweep.broken then
             pcall(function()
                 setMapUserData("scouter.scan",
-                    scanTarget .. "~" .. scanPower .. "~" .. tostring(os.time()))
+                    sweep.target .. "~" .. sweep.power .. "~" .. tostring(os.time()))
             end)
         end
-        if debugOn then print(TAG .. "scan power <" .. scanPower .. ">") end
+        if debugOn then print(TAG .. "scan power <" .. sweep.power .. ">") end
         safeRender()
         if gagArt then return false end
         return true
@@ -1693,7 +1723,7 @@ local function handleScan(clean)
 
     -- The two art lines only get eaten while a scan is actually in flight, so a
     -- stray '_' anywhere else in the game is never touched.
-    scanPending = scanPending - 1
+    sweep.pending = sweep.pending - 1
     local bare = trimBoth(clean)
     if bare == "_" or bare == "(*)" then
         if gagArt then return false end
@@ -1712,8 +1742,8 @@ local function noticeDuplicateMap(clean)
 
     hintShown = true
     setVariable("hintShown", "yes")
-    echo(TAG .. "the server is still drawing the map into your output.", ALERT)
-    echo(TAG .. "the panel has it -- run:  " .. CONFIG_HINT, ALERT)
+    echo(TAG .. "the server is still drawing the map into your output.", hue.ALERT)
+    echo(TAG .. "the panel has it -- run:  " .. CONFIG_HINT, hue.ALERT)
 end
 
 local function handleLine(sessionId, rawLine, cleanLine)
@@ -1721,8 +1751,8 @@ local function handleLine(sessionId, rawLine, cleanLine)
 
     if handleScan(clean) == false then return false end
     if readComms(clean) then
-        if lensJustChanged then
-            lensJustChanged = false
+        if glass.justChanged then
+            glass.justChanged = false
             applyLens()
             saveSettings()
         end
@@ -1754,11 +1784,11 @@ end
 local function printDiag()
     print(TAG .. "instance=" .. INSTANCE
         .. " live=" .. tostring(getVariable("instance")))
-    print(TAG .. "connected=" .. tostring(negoConnected)
-        .. " negotiated=" .. tostring(negoDone)
-        .. " attempts=" .. negoAttempts .. "/" .. NEGO_MAX)
-    if firstPacketAfter then
-        print(TAG .. "first packet arrived after attempt " .. firstPacketAfter)
+    print(TAG .. "connected=" .. tostring(nego.connected)
+        .. " negotiated=" .. tostring(nego.done)
+        .. " attempts=" .. nego.tries .. "/" .. nego.MAX)
+    if nego.firstPacketAfter then
+        print(TAG .. "first packet arrived after attempt " .. nego.firstPacketAfter)
     end
 
     local defCount = 0
@@ -1779,19 +1809,19 @@ local function printDiag()
             .. " runs=" .. curSnap.runTotal .. " seq=" .. tostring(curSnap.sequence))
     end
 
-    print(TAG .. "scan target<" .. scanTarget .. "> power<" .. scanPower
-        .. "> broken=" .. tostring(scanBroken) .. " pending=" .. scanPending
-        .. " hits=" .. scanHits)
-    print(TAG .. "lensSub=" .. lensSub .. " debug=" .. tostring(debugOn))
-    print(TAG .. "stripFrame=" .. tostring(stripFrame) .. " inset=" .. mapInset
-        .. " drawn=" .. gridCols .. "x" .. gridRows)
-    print(TAG .. "terminal font <" .. termFamily .. "> " .. termSize .. "px"
+    print(TAG .. "scan target<" .. sweep.target .. "> power<" .. sweep.power
+        .. "> broken=" .. tostring(sweep.broken) .. " pending=" .. sweep.pending
+        .. " hits=" .. sweep.hits)
+    print(TAG .. "lensSub=" .. glass.sub .. " debug=" .. tostring(debugOn))
+    print(TAG .. "stripFrame=" .. tostring(ui.stripFrame) .. " inset=" .. ui.inset
+        .. " drawn=" .. ui.cols .. "x" .. ui.rows)
+    print(TAG .. "terminal font <" .. ui.family .. "> " .. ui.size .. "px"
         .. " -> bar=" .. barSize() .. " scan=" .. scanSize() .. " idle=" .. idleSize())
-    print(TAG .. "panel=" .. panelW .. "x" .. panelH
-        .. " grid=" .. gridFont .. "px zoom=" .. zoom
-        .. " (fit range " .. FS_MIN .. "-" .. FS_MAX .. ")")
-    print(TAG .. "widgetInfo w=" .. tostring(widgetInfo(widget, 3))
-        .. " h=" .. tostring(widgetInfo(widget, 4)))
+    print(TAG .. "panel=" .. ui.w .. "x" .. ui.h
+        .. " grid=" .. ui.gridFont .. "px zoom=" .. ui.zoom
+        .. " (fit range " .. ui.FS_MIN .. "-" .. ui.FS_MAX .. ")")
+    print(TAG .. "widgetInfo w=" .. tostring(widgetInfo(ui.id, 3))
+        .. " h=" .. tostring(widgetInfo(ui.id, 4)))
     print(TAG .. "lastError=" .. lastError)
 end
 
@@ -1801,19 +1831,19 @@ end
 
 function init()
     readTerminalFont()
-    fontSize = termSize          -- the terminal's size is the default basis
+    ui.fontSize = ui.size          -- the terminal's size is the default basis
 
     local fs = safeNum(getVariable("fontSize"))
-    if fs and fs >= 6 and fs <= 32 then fontSize = math.floor(fs) end
-    if getVariable("showHeader") == "no" then showHeader = false end
-    if getVariable("showScan") == "no" then showScan = false end
+    if fs and fs >= 6 and fs <= 32 then ui.fontSize = math.floor(fs) end
+    if getVariable("showHeader") == "no" then ui.header = false end
+    if getVariable("showScan") == "no" then ui.scan = false end
     if getVariable("gagArt") == "no" then gagArt = false end
     if getVariable("hintShown") == "yes" then hintShown = true end
     local z = safeNum(getVariable("zoom"))
-    if z and z >= 0 and z <= FS_MAX then zoom = math.floor(z) end
+    if z and z >= 0 and z <= ui.FS_MAX then ui.zoom = math.floor(z) end
     local pa = safeNum(getVariable("panelAlpha"))
-    if pa and pa >= 0 and pa <= 1 then panelAlpha = pa end
-    if getVariable("stripFrame") == "no" then stripFrame = false end
+    if pa and pa >= 0 and pa <= 1 then ui.alpha = pa end
+    if getVariable("stripFrame") == "no" then ui.stripFrame = false end
     setLens(getVariable("lens"))
 
     makeWidget()
@@ -1834,7 +1864,7 @@ function init()
 
     -- A reload mid-session never sees onConnect, so arm here too. The tick
     -- still holds everything back until the first scheduled slot.
-    negoConnected = true
+    nego.connected = true
     setVariable("instance", INSTANCE)
     armNegotiation("plugin load")
 
@@ -1853,43 +1883,43 @@ function init()
         if cmd == "enable" then
             armNegotiation("manual")
             sendSupports()
-            echo(TAG .. "asked the server for the Map module.", ALERT)
+            echo(TAG .. "asked the server for the Map module.", hue.ALERT)
 
         elseif cmd == "hello" then
             -- Deliberately separate from 'enable'. Hello is once per session;
             -- this is the escape hatch for when you want to force another.
             sendHello(true)   -- explicit command: always send
-            echo(TAG .. "Core.Hello sent as " .. CLIENT .. " " .. CLIENT_VERSION .. ".", ALERT)
+            echo(TAG .. "Core.Hello sent as " .. nego.CLIENT .. " " .. nego.CLIENT_VERSION .. ".", hue.ALERT)
 
         elseif cmd == "show" then
-            showWidget(widget)
+            showWidget(ui.id)
             safeRender()
         elseif cmd == "hide" then
-            hideWidget(widget)
+            hideWidget(ui.id)
         elseif cmd == "redraw" then
             safeRender()
 
         elseif cmd == "scan" then
-            showScan = not showScan
+            ui.scan = not ui.scan
             saveSettings()
             safeRender()
         elseif cmd == "header" then
-            showHeader = not showHeader
+            ui.header = not ui.header
             saveSettings()
             safeRender()
 
         elseif cmd:sub(1, 5) == "zoom " then
             local spec = cmd:sub(6)
             if spec == "fit" then
-                zoom = 0
-                echo(TAG .. "fitting to the panel.", ALERT)
+                ui.zoom = 0
+                echo(TAG .. "fitting to the panel.", hue.ALERT)
             else
                 local n = safeNum(spec)
                 if n then
-                    zoom = math.max(FS_MIN, math.min(FS_MAX, math.floor(n)))
-                    echo(TAG .. "locked at " .. zoom .. "px.", ALERT)
+                    ui.zoom = math.max(ui.FS_MIN, math.min(ui.FS_MAX, math.floor(n)))
+                    echo(TAG .. "locked at " .. ui.zoom .. "px.", hue.ALERT)
                 else
-                    echo(TAG .. "zoom: fit, or " .. FS_MIN .. "-" .. FS_MAX, "#ff6666")
+                    echo(TAG .. "zoom: fit, or " .. ui.FS_MIN .. "-" .. ui.FS_MAX, "#ff6666")
                     return
                 end
             end
@@ -1902,28 +1932,28 @@ function init()
                 echo(TAG .. "opacity takes 0-100 (0 = see straight through)", "#ff6666")
                 return
             end
-            panelAlpha = math.floor(n) / 100
+            ui.alpha = math.floor(n) / 100
             saveSettings()
             applyAlpha()
             safeRender()
-            echo(TAG .. "opacity " .. math.floor(n) .. "%", ALERT)
+            echo(TAG .. "opacity " .. math.floor(n) .. "%", hue.ALERT)
 
         elseif cmd == "debug" then
             debugOn = not debugOn
-            echo(TAG .. "debug " .. tostring(debugOn), ALERT)
+            echo(TAG .. "debug " .. tostring(debugOn), hue.ALERT)
 
         elseif cmd == "frame" then
-            stripFrame = not stripFrame
+            ui.stripFrame = not ui.stripFrame
             saveSettings()
             safeRender()
-            if stripFrame then echo(TAG .. "server frame stripped.", ALERT)
-            else echo(TAG .. "server frame kept.", ALERT) end
+            if ui.stripFrame then echo(TAG .. "server frame stripped.", hue.ALERT)
+            else echo(TAG .. "server frame kept.", hue.ALERT) end
 
         elseif cmd == "gag" then
             gagArt = not gagArt
             saveSettings()
-            if gagArt then echo(TAG .. "scouter art gagged.", ALERT)
-            else echo(TAG .. "scouter art left in the terminal.", ALERT) end
+            if gagArt then echo(TAG .. "scouter art gagged.", hue.ALERT)
+            else echo(TAG .. "scouter art left in the terminal.", hue.ALERT) end
 
         elseif cmd:sub(1, 5) == "font " then
             local spec = cmd:sub(6)
@@ -1934,7 +1964,7 @@ function init()
             else
                 local n = safeNum(spec)
                 if n then
-                    fontSize = math.max(6, math.min(32, math.floor(n)))
+                    ui.fontSize = math.max(6, math.min(32, math.floor(n)))
                     saveSettings()
                     safeRender()
                 else
@@ -1942,7 +1972,7 @@ function init()
                     return
                 end
             end
-            echo(TAG .. "font size " .. fontSize, ALERT)
+            echo(TAG .. "font size " .. ui.fontSize, hue.ALERT)
 
         elseif cmd == "diag" then
             printDiag()
@@ -1957,10 +1987,10 @@ function init()
 
         elseif cmd == "lens" or cmd == "colour" or cmd == "color" then
             local names = {}
-            for name in pairs(LENSES) do names[#names + 1] = name end
+            for name in pairs(glass.ALL) do names[#names + 1] = name end
             table.sort(names)
-            echo(TAG .. "lens: " .. lens, ALERT)
-            echo("         dbscout lens " .. table.concat(names, " | "), ALERT)
+            echo(TAG .. "lens: " .. glass.cur, hue.ALERT)
+            echo("         dbscout lens " .. table.concat(names, " | "), hue.ALERT)
 
         elseif cmd:sub(1, 5) == "lens " or cmd:sub(1, 7) == "colour "
             or cmd:sub(1, 6) == "color " then
@@ -1973,12 +2003,12 @@ function init()
             saveSettings()
             applyLens()
             safeRender()
-            echo(TAG .. "lens: " .. lens, ALERT)
+            echo(TAG .. "lens: " .. glass.cur, hue.ALERT)
 
         elseif cmd == "comms" then
             -- The panel fills itself in from the reply; this is just the ask.
             send(CMD_SHOW)
-            echo(TAG .. "asked the scouter what it is set to.", ALERT)
+            echo(TAG .. "asked the scouter what it is set to.", hue.ALERT)
         elseif cmd:sub(1, 3) == "api" then
             -- The documented API is a fraction of what is bound. Enumerating
             -- _G is the only way to know what this build actually has.
@@ -2018,22 +2048,22 @@ function init()
             end
 
         else
-            echo(TAG .. "dbscout enable | show | hide | redraw", ALERT)
-            echo("         dbscout font +|-|<6-32> | header | scan", ALERT)
-            echo("         dbscout comms  - read TX, RCV and the channel back", ALERT)
-            echo("         dbscout lens <colour>  - what shade the panel glows", ALERT)
-            echo("         dbscout zoom fit|<6-34>  - fill the panel, or lock a size", ALERT)
-            echo("         dbscout opacity <0-100>  - 0 to read the output behind it", ALERT)
-            echo("         dbscout frame  - keep or drop the server's own border", ALERT)
-            echo("         dbscout gag    - keep the scouter art out of the terminal", ALERT)
-            echo("         dbscout diag | raw | packages", ALERT)
+            echo(TAG .. "dbscout enable | show | hide | redraw", hue.ALERT)
+            echo("         dbscout font +|-|<6-32> | header | scan", hue.ALERT)
+            echo("         dbscout comms  - read TX, RCV and the channel back", hue.ALERT)
+            echo("         dbscout lens <colour>  - what shade the panel glows", hue.ALERT)
+            echo("         dbscout zoom fit|<6-34>  - fill the panel, or lock a size", hue.ALERT)
+            echo("         dbscout opacity <0-100>  - 0 to read the output behind it", hue.ALERT)
+            echo("         dbscout frame  - keep or drop the server's own border", hue.ALERT)
+            echo("         dbscout gag    - keep the scouter art out of the terminal", hue.ALERT)
+            echo("         dbscout diag | raw | packages", hue.ALERT)
         end
     end, "Scouter map control")
 end
 
 function onConnect(sessionId)
-    negoConnected = true
-    helloSent = false        -- a new session is a new handshake
+    nego.connected = true
+    nego.helloSent = false        -- a new session is a new handshake
     curSnap = nil
     curDef = nil
     -- The server's sequence counter restarts with the session. Keeping the old
@@ -2045,8 +2075,8 @@ function onConnect(sessionId)
 end
 
 function onDisconnect(sessionId)
-    negoConnected = false
-    negoDone = false
+    nego.connected = false
+    nego.done = false
 end
 
 function cleanup() end
