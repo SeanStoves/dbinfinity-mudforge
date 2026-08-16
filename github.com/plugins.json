@@ -3,7 +3,7 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-16T03:32:14Z",
+  "generated": "2026-08-16T15:29:33Z",
   "pluginCount": 6,
   "plugins": [
     {
@@ -23,14 +23,14 @@
     {
       "id": "dbi-portrait",
       "name": "DB Infinity Portrait",
-      "version": "2026.08.15.007",
+      "version": "2026.08.16.001",
       "author": "Solao",
       "description": "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-portrait.json",
       "format": "json",
-      "sha256": "d7adc9cd880565d2dcf62661d8fbabdd20a631ce1642b18e2bff5d07ec2500e2",
-      "size": 275762,
+      "sha256": "a8a7df9eceaee0bf62ab579b80012987bac8dfb667191feee3f8c241eb9efe54",
+      "size": 278441,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/portrait.md"
     },
@@ -51,14 +51,14 @@
     {
       "id": "dbi-codex",
       "name": "DB Infinity Codex",
-      "version": "2026.08.16.004",
+      "version": "2026.08.16.005",
       "author": "Solao",
       "description": "A searchable record of items and mobs: what they are, and where you found them.",
       "category": "widgets",
       "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-codex.json",
       "format": "json",
-      "sha256": "9175fee47a7a27ae9c97bd94e5e76b1a489eed69ed45e0250604869fee308fd0",
-      "size": 120918,
+      "sha256": "483b352534f4500ac3b926ffd545668ff028b2030cc19028a5a36cc91686ca44",
+      "size": 132671,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/codex.md"
     },

@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.15.007",
+    version     = "2026.08.16.001",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -182,7 +182,12 @@ local vit = nil
 --   stats  the four attributes, the armour ceiling, zeni: "gmcp" or "score".
 --   items  inventory and equipment: "gmcp", or "capture" to go back to
 --          reading the output of 'inv' and 'eq'.
-local src = { bars = "gmcp", stats = "gmcp", items = "gmcp" }
+-- GMCP for all four, and the toggle is there for when a node disappoints.
+--
+-- The channel parsing stays either way -- it is the only thing that knows a
+-- sale from an expiry, which is what Codex's price history is built on. This
+-- decides who sets the pill, nothing more.
+local src = { bars = "gmcp", stats = "gmcp", items = "gmcp", auc = "gmcp" }
 
 local foe = { val = nil, at = 0, saw = "", got = "", why = "",
               name = nil, hit = nil, peak = nil, race = nil, max = nil,
@@ -3135,6 +3140,10 @@ end
 -- A bid and both 'going' calls set rather than only refresh, so joining
 -- part-way through an auction still fills the footer.
 local function feedAuction(clean)
+    -- The channel still runs the pill when GMCP is switched off. It is also
+    -- the only thing that knows a sale from an expiry, so it keeps reading
+    -- either way -- this only decides who sets the item.
+    if src.auc == "gmcp" then return false end
     local gone = capOf(clean,
         "^Auction:%s+No bids received for (.+) %- removed from auction%.$")
         or capOf(clean, "^Auction:%s+(.+) sold to %S+ for %S+%.$")
@@ -3381,6 +3390,9 @@ local function cfgBody()
     add('<div class="crow"><span class="ck">inventory + equipment</span>')
     add('<span class="tb" data-mud-action="cfgtog" data-mud-data="srcitems">'
         .. src.items .. "</span></div>")
+    add('<div class="crow"><span class="ck">auction</span>')
+    add('<span class="tb" data-mud-action="cfgtog" data-mud-data="srcauc">'
+        .. src.auc .. "</span></div>")
 
     add('<div class="crow"><span class="ck">text size</span>')
     add('<span class="tb" data-mud-action="cfgnudge" data-mud-data="font-">-</span>')
@@ -3629,6 +3641,43 @@ local function safeRender(force)
     if not ok then
         lastError = tostring(err)
         print(TAG .. "render error: " .. lastError)
+    end
+end
+
+-- comm.auction: { item, bid }, nulled when nothing is up.
+--
+-- The pill only ever shows the item, and this states it outright -- no
+-- waiting for the next channel line, and nothing an item name can do to it.
+-- Names on this MUD are hostile: '<<Orb>> of <<Infinity>>', 'Hardened
+-- \Ginyu Force/ Battle Gauntlets'.
+--
+-- It also answers the case the channel cannot: connecting part-way through an
+-- auction, where the footer stays empty until somebody bids.
+--
+-- The channel parsing stays. It is the only thing that knows a sale from an
+-- expiry, and Codex's price history is built on that distinction -- this just
+-- takes the pill off it.
+local onAuction = nil
+onAuction = function(data)
+    if src.auc ~= "gmcp" then return end
+    local t = data
+    if type(t) == "table" and type(t.auction) == "table" then t = t.auction end
+    if type(t) ~= "table" then return end
+
+    local item = t.item
+    if type(item) ~= "string" or item == "" or item == "undefined" then
+        -- nulled: the auction is over, whichever way it went
+        if charState.auction ~= nil then
+            charState.auction = nil
+            charState.auctionSrc = nil
+            safeRender()
+        end
+        return
+    end
+    if charState.auction ~= item then
+        charState.auction = item
+        charState.auctionSrc = "gmcp"
+        safeRender()
     end
 end
 
@@ -3894,6 +3943,7 @@ local function saveSettings()
             srcMode = src.bars,
             srcStats = src.stats,
             srcItems = src.items,
+            srcAuc = src.auc,
             containers = isCont,
             panelAlpha = tostring(panelAlpha),
             profiles = keep,
@@ -4574,6 +4624,8 @@ local function makeWidget()
                 if src.stats == "score" then src.stats = "gmcp" else src.stats = "score" end
             elseif arg == "srcitems" then
                 if src.items == "capture" then src.items = "gmcp" else src.items = "capture" end
+            elseif arg == "srcauc" then
+                if src.auc == "chan" then src.auc = "gmcp" else src.auc = "chan" end
             end
             safeRender(true)
             saveSettings()
@@ -4757,7 +4809,8 @@ local function printDiag()
     local foeAge = "-"
     if foe.val then foeAge = tostring(math.floor(os.clock() - foe.at)) end
     print(TAG .. "plMode=" .. plMode .. " foe=" .. tostring(foe.val) .. " foeAge=" .. foeAge
-        .. " src=" .. src.bars .. "/" .. src.stats .. "/" .. src.items)
+        .. " src=" .. src.bars .. "/" .. src.stats .. "/" .. src.items
+        .. "/" .. src.auc)
     print(TAG .. "last opponent line: [" .. tostring(foe.saw) .. "]")
     print(TAG .. "read off it: " .. tostring(foe.got)
         .. "  held at clock " .. tostring(foe.at))
@@ -5400,6 +5453,7 @@ function init()
     if p.srcMode == "prompt" then src.bars = "prompt" end
     if p.srcStats == "score" then src.stats = "score" end
     if p.srcItems == "capture" then src.items = "capture" end
+    if p.srcAuc == "chan" then src.auc = "chan" end
 
     -- Stored data is still data: a table written by an older build, or edited
     -- by hand, has never been through itemPhrase. Letters, digits and single
@@ -5637,6 +5691,12 @@ function init()
     -- because this client has answered to either for vitals.
     onGMCPUpdate("char.target", onTarget)
     onGMCPUpdate("Char.Target", onTarget)
+
+    -- comm.auction: { item, bid }. Both spellings and both shapes -- the node
+    -- may arrive as the leaf or as its parent.
+    onGMCPUpdate("comm.auction", onAuction)
+    onGMCPUpdate("Comm.Auction", onAuction)
+    onGMCPUpdate("comm", onAuction)
 
     setVariable("instance", INSTANCE)
     pcall(setVariable, "instanceAt", tostring(INSTANCE_AT))

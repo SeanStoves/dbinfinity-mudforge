@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.004",
+    version     = "2026.08.16.005",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -57,6 +57,29 @@ local termSize = 13
 
 local mobs = {}
 local items = {}
+
+-- Who teaches what, keyed by room.
+--
+--   [vnum] = { area = "", teaches = { [skill] = 1 }, refused = { [skill] = 1 } }
+--
+-- Nothing in the game lists a trainer's stock -- 'practice' with no argument
+-- prints YOUR tree, not theirs -- so the only way to learn one is to try and
+-- remember. Same shape as the dry simulators in the trainer plugin, which
+-- keep the power level a capsule stopped paying at rather than a flag.
+--
+-- This lives here rather than in dbi-train because it is a fact about a
+-- place, which is what this plugin is for, and it is the same for everyone.
+-- What a skill costs YOU, and which ones you have chosen to use, stay over
+-- there.
+local trainers = {}
+-- The skill the last 'prac <skill>' asked for. The refusal does not name it:
+--
+--   An Attendant tells you, 'I do not know how to teach that.'
+--
+-- NOT called 'pending'. There is already one of those for the search box, and
+-- two locals of one name in a chunk is a JavaScript let clash that stops the
+-- whole file loading.
+local pracAsk = ""
 local filter = ""
 -- What is in the search box right now, which is not the same as what is being
 -- filtered on. Typing updates this and renders NOTHING -- rebuilding the panel
@@ -391,6 +414,66 @@ local function roomLabel(vnum)
         if nm ~= "" then return nm end
     end
     return "#" .. tostring(n)
+end
+
+-- What the named race-skill trainers teach, and where they stand.
+--
+-- Seeded rather than learned, because there is no way to learn it: you would
+-- have to already be standing in front of one. Compiled by the DBI community
+-- at dbi.quest.fyi/raceskill-trainers -- game facts rather than anyone's
+-- code, and the same for every player, which is why they are here and not in
+-- the private trainer plugin.
+--
+-- The generic attendant in a training room is a different animal and IS
+-- learned, below. These are the named ones you go looking for.
+local TAUGHT_BY = {
+    { who = "Piccolo",       race = "any",       where = "Bear Forest (w, n, n from Zaede)",
+      skills = { "ki-heal", "split-form" } },
+    { who = "King Kai",      race = "any",       where = "north then east from Pikkon, via IT",
+      skills = { "kaio" } },
+    { who = "Tien",          race = "any",       where = "Snake Way from Yemma",
+      skills = { "dodon", "solar flare" } },
+    { who = "Master Roshi",  race = "any",       where = "base of Korin's Tower (eeeeeeeeqeeqnnn)",
+      skills = { "kamehameha", "super kamehameha" } },
+    { who = "Krillin",       race = "any",       where = "SW side of Capsule Corp",
+      skills = { "destructo disk" } },
+    { who = "Prince Vegeta", race = "saiyan",    where = "Castle Vegeta, top level, behind closed doors",
+      skills = { "bigbang", "gallic gun", "final flash" } },
+    { who = "Goku",          race = "saiyan",    where = "Roshi's Island",
+      skills = { "sdf" } },
+    { who = "Garlic Jr.",    race = "ghetti",    where = "Korin's Tower",
+      skills = { "ghetti skills" } },
+    { who = "Zarbon",        race = "hydian",    where = "Hydia",
+      skills = { "all except sauzer blade" } },
+    { who = "Frieza",        race = "hydian",    where = "HFIL",
+      skills = { "sauzer blade" } },
+    { who = "Frieza",        race = "icer",      where = "HFIL, next to Cell, via Babidi IT",
+      skills = { "non-trainer attacks" } },
+    { who = "Piccolo",       race = "namek",     where = "Battlescarred Clearing, via Sabre IT",
+      skills = { "split-form", "multi-form", "ki-heal" } },
+    { who = "Temple Masters", race = "kanassian", where = "Kanassa Temple, via IT Planewalk",
+      skills = { "dreamstate", "farstate", "astralstate" } },
+}
+
+-- Two skills that no trainer teaches at all: they come off a quest, and the
+-- quest is what puts them on the tree in the first place. Worth saying so
+-- rather than sending anyone looking for an attendant who has them.
+local BY_QUEST = {
+    ["instant transmission"] = "Yardrat Temple -- beat Instant Destruction twice. ~5m PL, and it must already be on your alist.",
+    ["zanzoken"] = "Sonata -- Gollos in The Root & Mineral, then Kemoya at the Starport. ~500k-1m PL, and it must already be on your slist.",
+}
+
+-- The record for the room we are standing in, made if this is the first time.
+local function trainerHere()
+    local at = here()
+    if type(at) ~= "table" then return nil end
+    local key = tostring(at.num)
+    if type(trainers[key]) ~= "table" then
+        trainers[key] = { area = at.area, teaches = {}, refused = {}, at = os.time() }
+    end
+    -- The area can be filled in later than the first sighting was.
+    if trainers[key].area == "" then trainers[key].area = at.area end
+    return trainers[key]
 end
 
 ----------------------------------------------------------------------
@@ -1291,7 +1374,7 @@ local function saveAll()
         -- scan that may not come round again for an hour, which is the same
         -- reason everything else here saves on every change.
         saveTable(STORE, { mobs = outMobs, items = outItems, view = view,
-                           kw = scanKw }, "global")
+                           kw = scanKw, trainers = trainers }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
@@ -1319,6 +1402,17 @@ local function loadAll()
     end
     if type(p) ~= "table" then return end
     loadedOk = true
+
+    if type(p.trainers) == "table" then
+        for k, v in pairs(p.trainers) do
+            if type(k) == "string" and type(v) == "table" then
+                if type(v.teaches) ~= "table" then v.teaches = {} end
+                if type(v.refused) ~= "table" then v.refused = {} end
+                if type(v.area) ~= "string" then v.area = "" end
+                trainers[k] = v
+            end
+        end
+    end
 
     if type(p.mobs) == "table" then
         for k, v in pairs(p.mobs) do
@@ -1897,6 +1991,67 @@ local function countOf(tbl)
     return n
 end
 
+-- Who teaches this, and where.
+--
+-- A plain function rather than only a route, because the command needs it too
+-- and 'route' is declared a few hundred lines further down -- a local used
+-- above its declaration resolves as a nil global here.
+local function queryTrainers(want)
+    local out, n = {}, 0
+
+    -- The named ones first: they are the answer to "where do I go", and a
+    -- room we have stood in cannot be.
+    for _, t in ipairs(TAUGHT_BY) do
+        local hit = want == ""
+        if not hit then
+            for _, sk in ipairs(t.skills) do
+                if sk:find(want, 1, true) ~= nil then hit = true end
+            end
+        end
+        if hit then
+            n = n + 1
+            out[n] = { kind = "named", who = t.who, race = t.race,
+                       where = t.where, skills = t.skills }
+        end
+    end
+
+    -- Then the rooms we have actually practised in.
+    for key, rec in pairs(trainers) do
+        local teaches, tn = {}, 0
+        for sk in pairs(rec.teaches) do
+            if want == "" or sk:find(want, 1, true) ~= nil then
+                tn = tn + 1
+                teaches[tn] = sk
+            end
+        end
+        local refused, rn = {}, 0
+        for sk in pairs(rec.refused) do
+            rn = rn + 1
+            refused[rn] = sk
+        end
+        table.sort(teaches)
+        table.sort(refused)
+        -- A room that refused the very thing being asked about is an
+        -- answer too -- it is the one place not to walk to.
+        if want == "" or tn > 0 or rec.refused[want] ~= nil then
+            n = n + 1
+            out[n] = { kind = "room", vnum = safeNum(key),
+                       room = roomLabel(key), area = rec.area,
+                       teaches = teaches, refused = refused,
+                       refusedThis = rec.refused[want] ~= nil }
+        end
+    end
+
+    local quest = nil
+    if want ~= "" then
+        for sk, howto in pairs(BY_QUEST) do
+            if sk:find(want, 1, true) ~= nil then quest = howto end
+        end
+    end
+
+    return { trainers = out, quest = quest }
+end
+
 local function dexCommand(cmd)
     local low = trimBoth(tostring(cmd or "")):lower()
 
@@ -1908,6 +2063,41 @@ local function dexCommand(cmd)
     elseif low == "hide" then
         shown = false
         if widget then hideWidget(widget) end
+
+    elseif low == "trainers" or low:sub(1, 9) == "trainers " then
+        local want = ""
+        if #low > 9 then want = trimBoth(low:sub(10)) end
+        local body = queryTrainers(want)
+
+        if want == "" then
+            print(TAG .. "trainers:")
+        else
+            print(TAG .. "trainers for '" .. want .. "':")
+        end
+        if body.quest ~= nil then
+            print("   not taught by anyone -- " .. body.quest)
+        end
+        local shownAny = false
+        for _, t in ipairs(body.trainers) do
+            shownAny = true
+            if t.kind == "named" then
+                print(string.format("   %-14s %-9s %s", t.who, t.race,
+                    table.concat(t.skills, ", ")))
+                print("                            " .. t.where)
+            else
+                local mark = ""
+                if t.refusedThis then mark = "  -- refused it here" end
+                print(string.format("   [%s] %s (%s)%s", tostring(t.vnum),
+                    t.room, t.area, mark))
+                if #t.teaches > 0 then
+                    print("      teaches: " .. table.concat(t.teaches, ", "))
+                end
+                if #t.refused > 0 then
+                    print("      refused: " .. table.concat(t.refused, ", "))
+                end
+            end
+        end
+        if not shownAny then print("   nothing known.") end
 
     elseif low == "mobs" or low == "items" then
         view = low
@@ -2326,6 +2516,14 @@ end
 local function route(method, path, q)
     if method ~= "GET" then
         return { status = 400, body = nil, err = "only GET is served" }
+    end
+
+    if path == "/trainers" then
+        local want = ""
+        if type(q) == "table" and type(q.skill) == "string" then
+            want = trimBoth(q.skill):lower()
+        end
+        return { status = 200, body = queryTrainers(want) }
     end
 
     if path == "/mobs" then return { status = 200, body = queryMobs(q) } end
@@ -2781,6 +2979,55 @@ function init()
     if countOf(mobs) > 0 or countOf(items) > 0 then saveAll() end
 end
 
+-- What a trainer just said. Three lines, all verbatim off the stream.
+--
+--   You practice suppress.                              it taught us
+--   I've taught you everything I can about suppress.    it can, we are capped
+--   I do not know how to teach that.                    it cannot
+--
+-- The first two name the skill and the third does not, which is why the ask
+-- is remembered on the way out.
+--
+-- 'only Yardrats have the ability to teach it' is NOT in here. It reads like
+-- a fourth answer and it is helpfile prose -- the last line of instant
+-- transmission's own help. Parsing it would file flavour text as a rule.
+local function readTrainer(clean)
+    local rec = nil
+
+    -- Prefixed by the prompt often enough that anchoring loses it:
+    --   (PowerLevel:<1.882m|1.882m>) You practice defensive style.
+    local won = clean:match("You practice (.+)%.")
+    if type(won) == "string" and won ~= "" then
+        rec = trainerHere()
+        if rec == nil then return false end
+        rec.teaches[won:lower()] = 1
+        rec.refused[won:lower()] = nil
+        return true
+    end
+
+    local had = clean:match("taught you everything I can about (.+)%.")
+    if type(had) == "string" and had ~= "" then
+        rec = trainerHere()
+        if rec == nil then return false end
+        -- It CAN teach it. That we are already at the cap is about us, not
+        -- about this room, and the room is what is being recorded.
+        rec.teaches[had:lower()] = 1
+        rec.refused[had:lower()] = nil
+        return true
+    end
+
+    if clean:find("I do not know how to teach that", 1, true) ~= nil then
+        if pracAsk == "" then return false end
+        rec = trainerHere()
+        if rec == nil then return false end
+        if rec.teaches[pracAsk] == nil then rec.refused[pracAsk] = 1 end
+        pracAsk = ""
+        return true
+    end
+
+    return false
+end
+
 function onLine(sessionId, rawLine, cleanLine)
     local ok, err = pcall(function()
         local clean = trimBoth(cleanLine)
@@ -2788,6 +3035,10 @@ function onLine(sessionId, rawLine, cleanLine)
 
         dropLine = false
         local touched = false
+        if readTrainer(clean) then
+            saveAll()
+            return
+        end
         -- The prompt closes an analyze block, and that is when what it said is
     -- worth telling anyone about -- mid-block the record is half written. Checked before the readers so a
         -- block cannot run on into whatever follows it.
@@ -2842,6 +3093,24 @@ function onLine(sessionId, rawLine, cleanLine)
         return false
     end
     return nil
+end
+
+-- The refusal does not name the skill, so the ask has to be caught going out.
+--
+-- 'prac' with no argument is the tree listing and not a practice at all;
+-- 'prac compact' and 'prac condensed' are its options. None of those are a
+-- skill and none should be remembered as one.
+function onSend(sessionId, text)
+    local ok = pcall(function()
+        local low = trimBoth(tostring(text or "")):lower()
+        local want = low:match("^prac%s+(.+)$")
+        if type(want) ~= "string" then want = low:match("^practice%s+(.+)$") end
+        if type(want) ~= "string" or want == "" then return end
+        want = trimBoth(want)
+        if want == "compact" or want == "condensed" then return end
+        pracAsk = want
+    end)
+    if not ok then lastError = "onSend" end
 end
 
 function onConnect(sessionId) end
