@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.000",
+    version     = "2026.08.16.001",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1973,6 +1973,14 @@ local function dexCommand(cmd)
     -- else's, never produces that line. This is the way to just say so.
     elseif low == "kw" or low:sub(1, 3) == "kw " then
         local word = trimBoth(low:sub(4))
+        -- 'kw <word> <mob name>' names it outright, for a room holding more
+        -- than one. Split on the first space; everything after is the mob.
+        local named = ""
+        local space = word:find(" ", 1, true)
+        if space ~= nil then
+            named = trimBoth(word:sub(space + 1))
+            word = trimBoth(word:sub(1, space - 1))
+        end
         if word == "" then
             local n = 0
             for name, kw in pairs(scanKw) do
@@ -1985,8 +1993,43 @@ local function dexCommand(cmd)
             end
             return
         end
-        local who = tried.name
+        local who = named
+        if who == "" then who = tried.name end
         if type(who) ~= "string" or who == "" then who = scan.who end
+
+        -- Nothing pending? Then use what is recorded in this room.
+        --
+        -- A scan is only ever OFFERED for a mob with no reading, so a mob
+        -- already known never becomes 'tried.name' -- and those are exactly
+        -- the ones worth naming, because they are the ones being hunted. This
+        -- used to refuse while the mob was standing in front of you.
+        if type(who) ~= "string" or who == "" then
+            local at = here()
+            local vnum = nil
+            if type(at) == "table" then vnum = safeNum(at.num) end
+            local found = {}
+            if vnum ~= nil then
+                for _, v in pairs(mobs) do
+                    if type(v) == "table" and type(v.name) == "string" then
+                        for _, r in ipairs(roomList(v)) do
+                            if r == vnum then
+                                push(found, v.name)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            if rowCount(found) == 1 then
+                who = found[1]
+            elseif rowCount(found) > 1 then
+                echo(TAG .. "more than one thing is recorded here. Name it: "
+                    .. "'dbdex kw <word> <mob>'.", GOLD)
+                for _, nm in ipairs(found) do print(TAG .. "   " .. nm) end
+                return
+            end
+        end
+
         if type(who) ~= "string" or who == "" then
             echo(TAG .. "nothing to attach that to -- walk into a room with a "
                 .. "mob in it first.", "#ff6666")
