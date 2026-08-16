@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.008",
+    version     = "2026.08.16.009",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1970,9 +1970,17 @@ local function trainersBody()
     if #named > 0 then
         add('<div class="sec">trainers</div>')
         for _, t in ipairs(named) do
+            -- The race pill only when it RESTRICTS you. Most trainers take
+            -- anyone, and a column of 'any' down the side says nothing while
+            -- looking like it should -- the same slot carries a mob's keyword
+            -- and an item's requirement, both facts about that row. Here it
+            -- is a fact about who is barred.
+            local pill = ""
+            if t.race ~= "any" then
+                pill = '<span class="go2">' .. escapeHtml(t.race) .. "</span>"
+            end
             add('<div class="row"><span class="nm">' .. escapeHtml(t.who)
-                .. '</span><span class="go2">' .. escapeHtml(t.race)
-                .. "</span></div>")
+                .. "</span>" .. pill .. "</div>")
             add('<div class="sub">' .. escapeHtml(table.concat(t.skills, ", "))
                 .. "</div>")
             add('<div class="sub">' .. escapeHtml(t.where) .. "</div>")
