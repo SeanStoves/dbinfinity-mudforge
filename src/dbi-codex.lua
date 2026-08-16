@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.001",
+    version     = "2026.08.16.002",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -137,6 +137,15 @@ local scanKw = {}
 -- candidate that was. If the MUD answers "They aren't here." the next word is
 -- tried, and whichever finally works is kept.
 local tried = { name = "", word = "", idx = 0, at = 0 }
+
+-- 'dbdex scanall' works through the room one mob at a time.
+--
+-- One at a time because 'tried' is a single slot: it holds which mob a scan
+-- was sent for and which word was used, and that is how a returning outline
+-- gets attached to the right name. Fire three scans together and the outlines
+-- come back with no way to tell whose is whose, and the keyword learned goes
+-- on the wrong mob.
+local bulk = { list = {}, at = 0, on = false }
 local linkOn = true
 
 -- The vnum we were standing in when the last line came through. Nothing else
@@ -784,6 +793,8 @@ end
 local function feedScan(clean)
     local who = capOf(clean, "^A yellow outline forms around%s+(.+)%s+in your vision%.$")
     if who ~= nil then
+        -- one down; the next goes out on the following tick
+        if bulk.on then bulk.at = 0 end
         scan.who = cleanName(who)
         scan.at = os.time()
         -- Whatever word we last offered got an outline, so it is the right one
@@ -2040,6 +2051,42 @@ local function dexCommand(cmd)
         forgetOffers()
         echo(TAG .. "'" .. who .. "' will be scanned as '" .. word .. "'.", GOLD)
 
+    -- Read everything in this room that has not been read.
+    --
+    -- They queue. The MUD answers one scan at a time and this plugin tracks
+    -- one -- 'tried' holds which mob was asked about and with which word --
+    -- so three at once come back with no way to tell whose outline is whose.
+    elseif low == "scanall" then
+        local at = here()
+        local vnum = nil
+        if type(at) == "table" then vnum = safeNum(at.num) end
+        if vnum == nil then
+            echo(TAG .. "no room yet.", "#ff6666")
+            return
+        end
+
+        local todo = {}
+        for _, v in pairs(mobs) do
+            if type(v) == "table" and type(v.name) == "string"
+                and safeNum(v.pl) == nil then
+                for _, r in ipairs(roomList(v)) do
+                    if r == vnum then
+                        push(todo, v.name)
+                        break
+                    end
+                end
+            end
+        end
+
+        if rowCount(todo) == 0 then
+            echo(TAG .. "nothing here left to read.", GOLD)
+            return
+        end
+        bulk.list = todo
+        bulk.on = true
+        bulk.at = 0
+        echo(TAG .. "reading " .. rowCount(todo) .. ", one at a time.", GOLD)
+
     elseif low == "diag" then
         print(TAG .. "instance=" .. INSTANCE)
         local spot = here()
@@ -2100,6 +2147,7 @@ local function dexCommand(cmd)
         echo("          dbdex trace on|off    print every widget event", GOLD)
         echo("          dbdex link on|off     offer a scan link in the scroll", GOLD)
         echo("          dbdex forget          drop everything recorded", GOLD)
+        echo("          dbdex scanall         read everything in this room", GOLD)
         echo("          dbdex diag            what it knows and where it thinks you are", GOLD)
     end
     return true
@@ -2598,6 +2646,45 @@ function init()
 
     -- Other plugins can ask. One envelope, documented in notes/codex-api.md, so
     -- the next plugin that answers questions implements the same shape.
+    -- The bulk scan's pacing. One a second: the MUD answers inside a round,
+    -- and anything faster is several scans in flight with one slot to track
+    -- them.
+    local beat2 = nil
+    beat2 = function()
+        pcall(function()
+            if bulk.on and bulk.at == 0 then
+                local name = nil
+                local left = {}
+                for i, nm in ipairs(bulk.list) do
+                    if i == 1 then name = nm else push(left, nm) end
+                end
+                bulk.list = left
+                if name == nil then
+                    bulk.on = false
+                    echo(TAG .. "done reading the room.", GOLD)
+                else
+                    local word = scanKw[keyOf(name)]
+                    if type(word) ~= "string" or word == "" then
+                        local words = keywords(name)
+                        word = words[1] or ""
+                    end
+                    if word ~= "" then
+                        tried.name, tried.word = name, word
+                        tried.idx, tried.at = 1, os.time()
+                        bulk.at = os.time()
+                        pcall(function() send("scan " .. word) end)
+                    end
+                end
+            elseif bulk.on and bulk.at > 0
+                and os.time() - bulk.at > SCAN_WAIT then
+                -- nothing came back for that one; move on rather than stall
+                bulk.at = 0
+            end
+        end)
+        pcall(function() addTimer(1000, beat2) end)
+    end
+    pcall(function() addTimer(1000, beat2) end)
+
     on("dbi.request", onRequest)
 
     registerCommand("dbdex", dexCommand, "Item and mob codex")
