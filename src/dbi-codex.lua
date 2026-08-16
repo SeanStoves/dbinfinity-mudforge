@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.002",
+    version     = "2026.08.16.003",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -93,6 +93,10 @@ end
 local view = "mobs"
 -- Which item the detail view is showing, if it is. Empty means the list.
 local detail = ""
+-- Which mob's keyword is being edited, and what has been typed into it so
+-- far. Empty means nobody is typing.
+local kwEdit = ""
+local kwTyped = ""
 -- Whether the 'found on' tree is open. One flag, because only one item's detail
 -- is on screen at a time.
 local srcOpen = false
@@ -1548,6 +1552,21 @@ local function mobsBody()
             add('<span class="go" data-mud-action="scan" data-mud-data="'
                 .. escapeHtml(m.name) .. '">scan</span>')
         end
+
+        -- The word this mob answers to, and a way to change it. Clicking it
+        -- turns this row into a field; anything else stays as it was.
+        if kwEdit == keyOf(m.name) then
+            -- value re-emitted from what has been typed, because a repaint
+            -- that DOES happen would otherwise empty the box
+            add('<form data-mud-action="kwsave"><input id="dexkw" type="text"'
+                .. ' value="' .. escapeHtml(kwTyped) .. '" size="8"></form>')
+            add('<span class="go" data-mud-action="kwsave">save</span>')
+        else
+            local word = scanKw[keyOf(m.name)]
+            if type(word) ~= "string" or word == "" then word = "kw?" end
+            add('<span class="go2" data-mud-action="kwedit" data-mud-data="'
+                .. escapeHtml(m.name) .. '">' .. escapeHtml(word) .. "</span>")
+        end
         add("</div>")
 
         -- Vnums, not names. A vnum is what identifies a room and it does not
@@ -1837,7 +1856,14 @@ local function render()
         .. "</div>")
 end
 
-local function safeRender()
+-- force = true for anything the USER just did.
+--
+-- This panel repaints whenever the MUD teaches it something, and a repaint
+-- replaces the input the user is typing into -- taking the caret with it.
+-- Portrait learned this the hard way with a url long enough to be worth
+-- pasting, which could not be typed at all.
+local function safeRender(force)
+    if kwEdit ~= "" and force ~= true then return end
     local ok, err = pcall(render)
     if not ok then
         lastError = tostring(err)
@@ -2564,6 +2590,31 @@ function init()
             if word ~= "" then
                 pcall(function() send("scan " .. word) end)
             end
+        elseif act == "kwedit" then
+            -- Open the field on this mob, seeded with whatever it answers to
+            -- now so a small correction is a small edit.
+            local nm = tostring(arg or "")
+            if nm ~= "" then
+                kwEdit = keyOf(nm)
+                kwTyped = scanKw[kwEdit] or ""
+                -- forced: the user asked for this, and the hold is only meant
+                -- to stop the MUD redrawing underneath them
+                safeRender(true)
+            end
+        elseif act == "kwsave" then
+            local word = trimBoth(kwTyped):lower()
+            if kwEdit ~= "" and word ~= "" then
+                scanKw[kwEdit] = word
+                forgetOffers()
+                saveAll()
+            elseif kwEdit ~= "" and word == "" then
+                -- emptied on purpose: forget it and go back to guessing
+                scanKw[kwEdit] = nil
+                saveAll()
+            end
+            kwEdit = ""
+            kwTyped = ""
+            safeRender(true)
         elseif act == "close" then
             shown = false
             hideWidget(widget)
@@ -2609,6 +2660,12 @@ function init()
     registerWidgetEvent(widget, "keyup", function(e)
         noteUi("keyup", e)
         if type(e) ~= "table" then return end
+        -- The keyword field, if that is the one being typed in. Captured
+        -- only -- rendering here would replace the input mid-word.
+        if e.targetId == "dexkw" then
+            if type(e.targetValue) == "string" then kwTyped = e.targetValue end
+            return
+        end
         if e.targetId ~= "dexfind" then return end
         if type(e.targetValue) == "string" then pending = e.targetValue end
         -- Enter, if the event says so. It is not documented to carry a key, so
@@ -2626,6 +2683,24 @@ function init()
     pcall(function() unregisterWidgetEvent(widget, "submit") end)
     registerWidgetEvent(widget, "submit", function(e)
         noteUi("submit", e)
+        -- Enter in the keyword field saves it, same as the button.
+        if kwEdit ~= "" then
+            if type(e) == "table" and type(e.targetValue) == "string" then
+                kwTyped = e.targetValue
+            end
+            local word = trimBoth(kwTyped):lower()
+            if word ~= "" then
+                scanKw[kwEdit] = word
+            else
+                scanKw[kwEdit] = nil
+            end
+            forgetOffers()
+            saveAll()
+            kwEdit = ""
+            kwTyped = ""
+            safeRender(true)
+            return
+        end
         if type(e) == "table" and type(e.targetValue) == "string" then
             pending = e.targetValue
         end
