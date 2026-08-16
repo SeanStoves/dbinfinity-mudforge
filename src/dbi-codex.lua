@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.003",
+    version     = "2026.08.16.004",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1558,7 +1558,14 @@ local function mobsBody()
         if kwEdit == keyOf(m.name) then
             -- value re-emitted from what has been typed, because a repaint
             -- that DOES happen would otherwise empty the box
-            add('<form data-mud-action="kwsave"><input id="dexkw" type="text"'
+            -- NO data-mud-action on the form. An action fires on a click
+            -- anywhere inside the element carrying it -- including the input
+            -- -- so clicking into the box saved and closed it. Tabbing in
+            -- worked, which is what gives it away.
+            --
+            -- The form still submits on enter; submit is its own event and
+            -- does not need the attribute.
+            add('<form><input id="dexkw" type="text"'
                 .. ' value="' .. escapeHtml(kwTyped) .. '" size="8"></form>')
             add('<span class="go" data-mud-action="kwsave">save</span>')
         else
