@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.005",
+    version     = "2026.08.17.006",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -3687,8 +3687,21 @@ local function footBar()
         --   au bid +     adds 25% (the default), so 10000 becomes 12500
         --
         -- One click, and no figure to type or get wrong.
-        add('<span class="fpill auc" data-mud-action="aucbid"'
-            .. ' title="bid 25% over the standing bid">bid +25%</span>')
+        -- The stats on hover, for anyone who would rather not put an
+        -- analyze in their own output to see them. A plain title attribute:
+        -- no script in the widget, and newlines survive as &#10;.
+        local tip = "bid 25% over the standing bid"
+        if type(charState.auctionTip) == "string"
+            and charState.auctionTip ~= "" then
+            tip = charState.auctionTip .. "\n\n" .. tip
+        end
+        -- Captured, not concatenated. gsub returns TWO values and an inline
+        -- one arrives here as a wrapped pair -- the title would have carried
+        -- ',1' on the end of it.
+        local tipHtml = escapeHtml(tip)
+        tipHtml = tipHtml:gsub("\n", "&#10;")
+        add('<span class="fpill auc" data-mud-action="aucbid" title="'
+            .. tipHtml .. '">bid +25%</span>')
     end
 
     if #t == 0 then return "" end
@@ -3794,6 +3807,64 @@ onAuction = function(data)
     local atBid = safeNum(t.bid)
     if atBid == nil then atBid = safeNum(t.starting) end
     charState.auctionBid = atBid
+
+    -- What the item IS, for the tooltip. Everything the packet carries and
+    -- nothing invented -- every field read on its own, because a missing one
+    -- arrives as undefined rather than absent.
+    local obj = t.item
+    if type(obj) == "table" then
+        local bits = {}
+        local function put(x) bits[#bits + 1] = x end
+        local function word(v)
+            if type(v) ~= "string" or v == "" or v == "undefined" then
+                return nil
+            end
+            return v
+        end
+        local head = {}
+        if word(obj.type) ~= nil then head[#head + 1] = obj.type end
+        if word(obj.wear) ~= nil then head[#head + 1] = "worn " .. obj.wear end
+        if safeNum(obj.powerlevel) ~= nil then
+            head[#head + 1] = "PL " .. short(obj.powerlevel)
+        end
+        if #head > 0 then put(table.concat(head, "  ")) end
+
+        if type(obj.armor) == "table" then
+            local cur, max = safeNum(obj.armor.current), safeNum(obj.armor.max)
+            if cur ~= nil and max ~= nil then
+                put("armour " .. cur .. "/" .. max)
+            end
+        end
+
+        -- The five, in the order the score sheet lists them, and only the
+        -- ones that are actually on it.
+        if type(obj.stats) == "table" then
+            local st = {}
+            for _, pair in ipairs({ { "strength", "STR" }, { "speed", "SPD" },
+                                    { "spirit", "SPR" }, { "fortitude", "FRT" },
+                                    { "luck", "LCK" } }) do
+                local v = safeNum(obj.stats[pair[1]])
+                if v ~= nil and v ~= 0 then
+                    st[#st + 1] = pair[2] .. " " .. v
+                end
+            end
+            if #st > 0 then put(table.concat(st, "  ")) end
+        end
+
+        local tail = {}
+        if safeNum(obj.value) ~= nil then
+            tail[#tail + 1] = "worth " .. short(obj.value)
+        end
+        if safeNum(obj.weight) ~= nil then
+            tail[#tail + 1] = "weight " .. obj.weight
+        end
+        if word(obj.properties) ~= nil then tail[#tail + 1] = obj.properties end
+        if #tail > 0 then put(table.concat(tail, "  ")) end
+
+        charState.auctionTip = table.concat(bits, "\n")
+    else
+        charState.auctionTip = nil
+    end
 
     local item = t.item
     if type(item) == "table" then item = item.name end
