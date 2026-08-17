@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.17.002",
+    version     = "2026.08.17.003",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -78,6 +78,23 @@ local store = {}
 
 store.mobs = {}
 store.items = {}
+
+-- Every actor 'type' GMCP has ever handed over, and which of them to ignore.
+--
+--   seenTypes  [type] = { n = count, eg = "a name that had it" }
+--   skipTypes  [type] = true, meaning do not record actors of this type
+--
+-- A BLOCKLIST, deliberately, and the reason is a bug this already caused. The
+-- first version whitelisted type == "mob" and every 'pacifist' vanished --
+-- silently, and looking exactly like an empty room. A whitelist fails closed
+-- on anything the MUD adds later and says nothing about it; a blocklist fails
+-- open, which is a junk row and one wasted scan. Visible beats quiet.
+--
+-- Seeded with the two types measured so far so the list starts from the wire
+-- rather than from a guess. 'player' is the one entry in skipTypes and is a
+-- guess -- no player has ever been seen in an actors list.
+store.seenTypes = { mob = { n = 0, eg = "" }, pacifist = { n = 0, eg = "" } }
+store.skipTypes = { player = true }
 
 -- Who teaches what, keyed by room.
 --
@@ -1397,7 +1414,9 @@ local function saveAll()
         -- scan that may not come round again for an hour, which is the same
         -- reason everything else here saves on every change.
         saveTable(store.KEY, { mobs = outMobs, items = outItems, view = ui.view,
-                           kw = scanKw, trainers = store.trainers }, "global")
+                           kw = scanKw, trainers = store.trainers,
+                           seenTypes = store.seenTypes,
+                           skipTypes = store.skipTypes }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
@@ -1425,6 +1444,24 @@ local function loadAll()
     end
     if type(p) ~= "table" then return end
     store.loadedOk = true
+
+    -- Merged rather than replaced, so the seeded types survive a store written
+    -- before they existed.
+    if type(p.seenTypes) == "table" then
+        for k, v in pairs(p.seenTypes) do
+            if type(k) == "string" and type(v) == "table" then
+                store.seenTypes[k] = { n = safeNum(v.n) or 0,
+                                       eg = tostring(v.eg or "") }
+            end
+        end
+    end
+    if type(p.skipTypes) == "table" then
+        local kept = {}
+        for k, v in pairs(p.skipTypes) do
+            if type(k) == "string" and v == true then kept[k] = true end
+        end
+        store.skipTypes = kept
+    end
 
     if type(p.trainers) == "table" then
         for k, v in pairs(p.trainers) do
@@ -2389,6 +2426,56 @@ local function dexCommand(cmd)
     -- They queue. The MUD answers one scan at a time and this plugin tracks
     -- one -- 'tried' holds which mob was asked about and with which word --
     -- so three at once come back with no way to tell whose outline is whose.
+    elseif low == "types" then
+        -- Every actor type the wire has handed over, with a count and the
+        -- first name that carried it. The counts are what make this worth
+        -- having: a type nobody expected showing up 200 times is the shape of
+        -- the pacifist bug, and it is invisible without a list.
+        local names = {}
+        for k in pairs(store.seenTypes) do names[#names + 1] = k end
+        table.sort(names)
+        echo(TAG .. "actor types seen:", hue.GOLD)
+        for _, k in ipairs(names) do
+            local row = store.seenTypes[k]
+            local mark = "recorded"
+            if store.skipTypes[k] then mark = "IGNORED" end
+            local eg = ""
+            if row.eg ~= "" then eg = "  e.g. " .. row.eg end
+            echo(string.format("   %-12s %6d  %-9s%s", k, row.n, mark, eg),
+                hue.GOLD)
+        end
+        echo("   'dbdex ignore <type>' to skip one, 'dbdex allow <type>' to"
+            .. " stop skipping it.", hue.GOLD)
+
+    elseif low:sub(1, 7) == "ignore " then
+        local kind = trimBoth(low:sub(8))
+        if kind == "" then
+            echo(TAG .. "ignore what? 'dbdex types' lists them.", "#ff6666")
+            return
+        end
+        store.skipTypes[kind] = true
+        saveAll()
+        echo(TAG .. "ignoring '" .. kind .. "'. Already-recorded ones stay;"
+            .. " 'dbdex forget' clears those.", hue.GOLD)
+
+    elseif low:sub(1, 6) == "allow " then
+        local kind = trimBoth(low:sub(7))
+        if kind == "" then
+            echo(TAG .. "allow what? 'dbdex types' lists them.", "#ff6666")
+            return
+        end
+        -- Rebuilt rather than deleted. Setting a table key to nil does not
+        -- always remove it here -- pairs() goes on yielding it -- so the
+        -- obvious 'skipTypes[kind] = nil' leaves the type skipped and the
+        -- command looks like it did nothing.
+        local kept = {}
+        for k, v in pairs(store.skipTypes) do
+            if k ~= kind and v == true then kept[k] = true end
+        end
+        store.skipTypes = kept
+        saveAll()
+        echo(TAG .. "recording '" .. kind .. "' from now on.", hue.GOLD)
+
     elseif low == "scanall" then
         local at = here()
         local vnum = nil
@@ -2489,6 +2576,9 @@ local function dexCommand(cmd)
         echo("          dbdex link on|off     offer a scan link in the scroll", hue.GOLD)
         echo("          dbdex forget          drop everything recorded", hue.GOLD)
         echo("          dbdex scanall         read everything in this room", hue.GOLD)
+        echo("          dbdex types           actor types GMCP has sent", hue.GOLD)
+        echo("          dbdex ignore <type>   stop recording that type", hue.GOLD)
+        echo("          dbdex allow <type>    record it again", hue.GOLD)
         echo("          dbdex diag            what it knows and where it thinks you are", hue.GOLD)
     end
     return true
@@ -2868,10 +2958,24 @@ function init()
                     -- A missing GMCP field crosses as the string 'undefined',
                     -- which is truthy and passes every emptiness check.
                     if type(one) == "table" and type(one.name) == "string"
-                        and one.name ~= "" and one.name ~= "undefined"
-                        and one.type ~= "player"
-                        and one.name:find("corpse", 1, true) == nil then
-                        noteMob(one.name, spot, nil)
+                        and one.name ~= "" and one.name ~= "undefined" then
+                        -- Counted BEFORE the skip check, so an ignored type
+                        -- still shows up in 'dbdex types'. A blocklist you
+                        -- cannot see the contents of is a whitelist with extra
+                        -- steps.
+                        local kind = one.type
+                        if type(kind) ~= "string" or kind == ""
+                            or kind == "undefined" then kind = "(none)" end
+                        local row = store.seenTypes[kind]
+                        if type(row) ~= "table" then row = { n = 0, eg = "" } end
+                        row.n = row.n + 1
+                        if row.eg == "" then row.eg = one.name end
+                        store.seenTypes[kind] = row
+
+                        if not store.skipTypes[kind]
+                            and one.name:find("corpse", 1, true) == nil then
+                            noteMob(one.name, spot, nil)
+                        end
                     end
                 end
             end)
