@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.004",
+    version     = "2026.08.17.005",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -3674,8 +3674,21 @@ local function footBar()
 
     if type(charState.auction) == "string" and charState.auction ~= "" then
         -- clicking it runs 'auc', which is what you want the moment you notice
+        -- clicking it runs 'auc', which is what you want the moment you notice
+        local label = charState.auction
+        local at = safeNum(charState.auctionBid)
+        if at ~= nil and at > 0 then label = label .. " -- " .. short(at) end
         add('<span class="fpill auc" data-mud-action="auc" title="auction">'
-            .. escapeHtml(charState.auction) .. "</span>")
+            .. escapeHtml(label) .. "</span>")
+        -- 'auc bid +' is the next available bid: 25% over the standing one,
+        -- which is what the plain '+' defaults to. From help auction2:
+        --
+        --   au bid +10   adds 10%, so 10000 becomes 11000
+        --   au bid +     adds 25% (the default), so 10000 becomes 12500
+        --
+        -- One click, and no figure to type or get wrong.
+        add('<span class="fpill auc" data-mud-action="aucbid"'
+            .. ' title="bid 25% over the standing bid">bid +25%</span>')
     end
 
     if #t == 0 then return "" end
@@ -3776,6 +3789,12 @@ onAuction = function(data)
     --
     -- Both shapes taken. A build still sending the bare name keeps working,
     -- and there is nothing to tell them apart by except the type.
+    -- The bid rides along with it now, so the footer can say what it is at
+    -- rather than only what it is for.
+    local atBid = safeNum(t.bid)
+    if atBid == nil then atBid = safeNum(t.starting) end
+    charState.auctionBid = atBid
+
     local item = t.item
     if type(item) == "table" then item = item.name end
     if type(item) ~= "string" or item == "" or item == "undefined" then
@@ -4576,6 +4595,11 @@ local function makeWidget()
             end
         elseif act == "auc" then
             pcall(function() send("auc") end)
+        elseif act == "aucbid" then
+            -- Sent, not staged. An auction is over in seconds and a
+            -- confirmation step is the difference between bidding and
+            -- watching somebody else win.
+            pcall(function() send("auc bid +") end)
         elseif act == "cfg" then
             -- A toggle: the gear both opens and leaves. Clicking a tab leaves
             -- too, so there is no way to be stuck in here.
