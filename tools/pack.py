@@ -64,7 +64,11 @@ CATALOGUE = {
     "dbi-portrait": ("widgets", "docs/portrait.md"),
     "dbi-chat":     ("widgets", "docs/chat.md"),
     "dbi-codex":    ("widgets", "docs/codex.md"),
-    "dbi-mapper":   ("widgets", "docs/mapper.md"),
+    # dbi-mapper is not published any more. The server sends room.info over
+    # GMCP now -- vnum, name, area and every exit -- so the client's own
+    # automapper is fed directly and there is nothing left for a plugin that
+    # reconstructs a map from printed room descriptions. docs/mapper.md is
+    # kept: it is the write-up of how that was done, and it stays true.
     "mudlog":       ("widgets", "docs/transcript.md"),
 }
 

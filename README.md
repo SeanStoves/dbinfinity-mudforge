@@ -48,7 +48,6 @@ below is all you need to remember.
 | plugin | command | what it does |
 |---|---|---|
 | **[DB Infinity Scouter](docs/scouter.md)** (`dbi-map`) | `dbscout` | The local map as a scouter readout, with `scan` power levels under it |
-| **[DB Infinity Mapper](docs/mapper.md)** (`dbi-mapper`) | `dbmap`, `dbgo` | A map of the whole world, built as you walk it, with pathfinding and speedwalks |
 | **[DB Infinity Portrait](docs/portrait.md)** (`dbi-portrait`) | `dbchar` | Your character: avatar, vitals, power level, transformations, and the full score sheet |
 | **[DB Infinity Chat](docs/chat.md)** (`dbi-chat`) | `dbchat` | Channel traffic split into tabs, with captures you define |
 | **[DB Infinity Codex](docs/codex.md)** (`dbi-codex`) | `dbdex` | A searchable record of the mobs and items you have met, built from what the MUD says in passing |
