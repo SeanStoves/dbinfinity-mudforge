@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.16.010",
+    version     = "2026.08.17.000",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -2167,12 +2167,12 @@ local function dexCommand(cmd)
 
     if low == "" or low == "show" then
         shown = true
-        if ui.id then showWidget(ui.id) end
+        if ui.id then showWidget(ui.id, true) end
         safeRender()
 
     elseif low == "hide" then
         shown = false
-        if ui.id then hideWidget(ui.id) end
+        if ui.id then hideWidget(ui.id, true) end
 
     elseif low == "trainers" or low:sub(1, 9) == "trainers " then
         local want = ""
@@ -2932,7 +2932,7 @@ function init()
             safeRender(true)
         elseif act == "close" then
             shown = false
-            hideWidget(ui.id)
+            hideWidget(ui.id, true)
         end
     end
 

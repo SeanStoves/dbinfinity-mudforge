@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.16.002",
+    version     = "2026.08.17.000",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -4762,7 +4762,7 @@ local function makeWidget()
             safeRender(true)
             saveSettings()
         elseif act == "close" then
-            hideWidget(panel.id)
+            hideWidget(panel.id, true)
         end
     end
 
@@ -5016,10 +5016,10 @@ local function charCommand(args)
     local low = cmd:lower()
 
     if low == "show" then
-        showWidget(panel.id)
+        showWidget(panel.id, true)
         safeRender(true)
     elseif low == "hide" then
-        hideWidget(panel.id)
+        hideWidget(panel.id, true)
     elseif low == "items gag on" or low == "items gag off" then
         gear.gag = (low == "items gag on")
         saveSettings()

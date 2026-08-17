@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-map",
     name        = "DB Infinity Scouter",
-    version     = "2026.08.16.000",
+    version     = "2026.08.17.000",
     author      = "Solao",
     description = "Dragonball Infinity's GMCP map, rendered as a scouter readout.",
     settings    = { saveState = true },
@@ -1647,7 +1647,7 @@ local function makeWidget()
         elseif act == "smaller" then
             bumpFont(-1)
         elseif act == "close" then
-            hideWidget(ui.id)
+            hideWidget(ui.id, true)
         end
     end)
 
@@ -1892,10 +1892,10 @@ function init()
             echo(TAG .. "Core.Hello sent as " .. nego.CLIENT .. " " .. nego.CLIENT_VERSION .. ".", hue.ALERT)
 
         elseif cmd == "show" then
-            showWidget(ui.id)
+            showWidget(ui.id, true)
             safeRender()
         elseif cmd == "hide" then
-            hideWidget(ui.id)
+            hideWidget(ui.id, true)
         elseif cmd == "redraw" then
             safeRender()
 

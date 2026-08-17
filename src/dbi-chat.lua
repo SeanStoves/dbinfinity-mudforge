@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-chat",
     name        = "DB Infinity Chat",
-    version     = "0.5.0",
+    version     = "2026.08.17.000",
     author      = "Solao",
     description = "Tabbed chat for Dragonball Infinity, with user-defined captures.",
     settings    = { saveState = true },
@@ -1097,10 +1097,10 @@ function init()
         local low = raw:lower()
 
         if low == "show" then
-            showWidget(widget)
+            showWidget(widget, true)
             safeRender()
         elseif low == "hide" then
-            hideWidget(widget)
+            hideWidget(widget, true)
         elseif low == "setup" then
             view = "settings"
             safeRender()

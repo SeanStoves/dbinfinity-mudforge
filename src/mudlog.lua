@@ -1,7 +1,7 @@
 plugin = {
     id          = "mudlog",
     name        = "Transcript",
-    version     = "0.1.5",
+    version     = "2026.08.17.000",
     author      = "Solao",
     description = "Plain-text session transcripts on disk, the way Mudlet and MushClient write them.",
     settings    = { saveState = true },
@@ -492,7 +492,7 @@ local function makeWidget()
             end
 
         elseif act == "close" then
-            hideWidget(widget)
+            hideWidget(widget, true)
             return
         end
         renderConfig()
@@ -544,7 +544,7 @@ function init()
             echo(TAG .. "flushed to " .. (openPath ~= "" and openPath or "nowhere"), "#ffb02e")
 
         elseif low == "config" then
-            showWidget(widget)
+            showWidget(widget, true)
             renderConfig()
 
         elseif low:sub(1, 7) == "folder " then
