@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.000",
+    version     = "2026.08.17.001",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -1686,6 +1686,16 @@ end
 -- The stamp stays as the cross-load backstop, but it cannot close the race on
 -- its own: setVariable is debounced, so two plugins starting in the same tick
 -- both read 'nobody has yet' before either write lands.
+-- char.effects, in the order the server sent them: { name, cat, val }.
+--
+-- A LIST rather than a map, because the pills are drawn in order and the
+-- server's order is as good as any. Rebuilt whole on every packet: an effect
+-- that has ended is simply absent from the next one.
+local effects = {}
+-- A packet having ARRIVED is not the same as nothing being on. Before the
+-- first one, the pl-against-base guesses below still stand.
+local effectsSeen = false
+
 local gmcpOwned = false
 
 local function ensureGmcp()
@@ -2460,7 +2470,29 @@ local function portraitBody()
     local grid = table.concat(rows)
     if grid ~= "" then add('<div class="attrs">' .. grid .. "</div>") end
 
+        -- Whatever the server says is switched on, as its own pill each.
+    --
+    --   "char": { "effects": [
+    --       { "name": "powerup",    "category": "buff" },
+    --       { "name": "suppressed", "category": "debuff", "value": 6000000 },
+    --       { "name": "white_pk",   "category": "pvp"  },
+    --       { "name": "translight", "category": "misc" } ] }
+    --
+    -- GMCP rather than a trigger, and in the order the server sent them.
+    -- A buff reads good, a debuff reads bad, anything else is plain -- there
+    -- is no list of category names to keep up to date that way.
     local pills = {}
+    for _, one in ipairs(effects) do
+        local cls = "pill"
+        if one.cat == "buff" then cls = "pill good"
+        elseif one.cat == "debuff" then cls = "pill bad" end
+        local txt = one.name
+        -- short(), the same 18.5M form the power level box uses. A pill is
+        -- a few characters wide and a suppression level is eight figures.
+        if one.val ~= nil then txt = txt .. " " .. short(one.val) end
+        pills[#pills + 1] = '<span class="' .. cls .. '">'
+            .. escapeHtml(txt) .. "</span>"
+    end
     if form.name ~= "" then
         pills[#pills + 1] = '<span class="pill good">' .. escapeHtml(form.name) .. "</span>"
     end
@@ -2474,7 +2506,11 @@ local function portraitBody()
     if has(pose) then
         pills[#pills + 1] = '<span class="pill">' .. escapeHtml(pose) .. "</span>"
     end
-    if has(base) and has(pl) then
+    -- Only when the server has not already said so. These are read off
+    -- pl against base, which cannot tell a suppression from a bad day and
+    -- says nothing about WHAT it is suppressed to -- char.effects carries
+    -- both. Kept for builds that do not send the package.
+    if not effectsSeen and has(base) and has(pl) then
         if pl > base then
             pills[#pills + 1] = '<span class="pill good">boosted</span>'
         elseif pl < base then
@@ -5726,6 +5762,34 @@ function init()
                            "char.inventory", "Char.Inventory" }) do
         onGMCPUpdate(pkg, onChar)
     end
+
+    -- char.effects: everything switched on, with its category and sometimes
+    -- a figure. Arrays cross this boundary 0-indexed and as objects with
+    -- numeric keys, so the list goes through normArray, and a missing field
+    -- arrives as the string 'undefined' rather than absent.
+    local function onEffects(data)
+        local raw = data
+        if type(raw) == "table" and type(raw.effects) == "table" then
+            raw = raw.effects
+        end
+        local list, n = normArray(raw)
+        local now = {}
+        for i = 1, n do
+            local one = list[i]
+            if type(one) == "table" and type(one.name) == "string"
+                and one.name ~= "" and one.name ~= "undefined" then
+                local cat = one.category
+                if type(cat) ~= "string" or cat == "undefined" then cat = "" end
+                now[#now + 1] = { name = one.name, cat = cat,
+                                  val = safeNum(one.value) }
+            end
+        end
+        effects = now
+        effectsSeen = true
+        safeRender()
+    end
+    onGMCPUpdate("char.effects", onEffects)
+    onGMCPUpdate("Char.Effects", onEffects)
 
     -- char.target: { name, hit, race }. More than the prompt ever gave -- it
     -- names the thing -- and no trigger needed to read it. Both spellings,
