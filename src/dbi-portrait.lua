@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.006",
+    version     = "2026.08.17.007",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -835,30 +835,27 @@ pr.MAX = 1024
 -- Real Lua handles the class correctly, which is why the suite stayed green
 -- through five releases of this.
 --
--- Backslash first in both lists, so escapes added afterwards are not escaped
--- again.
-local RX_SPECIAL = { "\\", "^", "$", "(", ")", ".", "[", "]",
-                     "*", "+", "-", "?", "|", "{", "}" }
-local LUA_SPECIAL = { "%", "^", "$", "(", ")", ".", "[", "]", "*", "+", "-", "?" }
-
+-- One class again, as of the 2026-08-17 client.
+--
+-- This was a loop over one character at a time for five releases, because a
+-- positive class holding ']' matched nothing and handed the subject straight
+-- back. 'dbprobe lua' says that is fixed -- the class escapes correctly now --
+-- and one pass is strictly better than the loop was: a backslash inserted by
+-- the pass cannot be seen again by it, so there is no ordering to get right.
+--
+-- Checked against the loop it replaces, byte for byte, over sixteen inputs
+-- including the ones that used to break it.
 local function promptEsc(s)
-    local out = s
-    for _, ch in ipairs(LUA_SPECIAL) do
-        -- '(%x)' and '%1' rather than '%0'. Every gsub in these six plugins
-        -- uses a numbered capture; '%0' for the whole match is not used
-        -- anywhere and is not proven to survive translation.
-        out = out:gsub("(%" .. ch .. ")", "%%%1")
-    end
-    return out
+    -- '(%x)' and '%1' rather than '%0'. Every gsub in these six plugins uses a
+    -- numbered capture; '%0' for the whole match is not used anywhere and is
+    -- not proven to survive translation.
+    return (s:gsub("([%%%^%$%(%)%.%[%]%*%+%-%?])", "%%%1"))
 end
 
 -- The same literal, escaped for JavaScript instead. Triggers take a real JS
 -- regex, untranslated, so this is the only place the two spellings meet.
 local function promptRx(s)
-    local out = s
-    for _, ch in ipairs(RX_SPECIAL) do
-        out = out:gsub("(%" .. ch .. ")", "\\%1")
-    end
+    local out = s:gsub("([\\%^%$%(%)%.%[%]%*%+%-%?%|{}])", "\\%1")
     -- A run of spaces becomes '\s+'. The MUD lines up prompt fields with more
     -- than one space sometimes, and a literal count would miss.
     out = out:gsub("  +", " ")
