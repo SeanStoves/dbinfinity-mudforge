@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.17.003",
+    version     = "2026.08.17.004",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1537,6 +1537,11 @@ local function css()
     add("border-bottom:1px solid rgba(255,255,255,0.05);}")
     add(".dbi-dex .nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}")
     add(".dbi-dex .pl{flex:0 0 auto;color:" .. hue.GOOD .. ";}")
+    -- What GMCP called the mob: 'pacifist ghetti', 'mob icer'. Dimmed and
+    -- shrunk, because it is context for the name rather than a reading --
+    -- the power level is the number the eye should land on.
+    add(".dbi-dex .kd{flex:0 0 auto;color:" .. hue.INK_DIM
+        .. ";font-size:0.85em;opacity:0.8;}")
     add(".dbi-dex .pl.none{color:" .. hue.UNKNOWN .. ";}")
     add(".dbi-dex .sub{padding:0 0 4px 14px;color:" .. hue.INK_DIM .. ";")
     add("border-left:1px solid " .. hue.RULE .. ";margin-left:4px;}")
@@ -1699,6 +1704,18 @@ local function mobsBody()
             plCls = ""
         end
         add('<div class="row"><span class="nm">' .. escapeHtml(m.name) .. "</span>")
+        -- What GMCP called it. Only the mobs seen since this started carrying
+        -- room.info have either, so the span is left off entirely rather than
+        -- printed empty -- an older record should look like a record with
+        -- less on it, not a broken one.
+        local what = ""
+        if type(m.race) == "string" and m.race ~= "" then what = m.race end
+        if type(m.kind) == "string" and m.kind ~= "" then
+            if what ~= "" then what = m.kind .. " " .. what else what = m.kind end
+        end
+        if what ~= "" then
+            add('<span class="kd">' .. escapeHtml(what) .. "</span>")
+        end
         add('<span class="pl' .. plCls .. '">' .. escapeHtml(plTxt) .. "</span>")
         -- Only offer to scan what has no reading. The button sends 'scan
         -- <name>' and nothing else; the reply comes back through the ordinary
@@ -2974,7 +2991,23 @@ function init()
 
                         if not store.skipTypes[kind]
                             and one.name:find("corpse", 1, true) == nil then
-                            noteMob(one.name, spot, nil)
+                            local rec = noteMob(one.name, spot, nil)
+                            -- Kept on the record, and only ever ADDED to it.
+                            -- The line reader records the same mobs off 'X is
+                            -- here.' and has neither field, so a sighting that
+                            -- arrives without them must not wipe what a GMCP
+                            -- one already put there.
+                            --
+                            -- Not part of the key: mobKey is area, name and
+                            -- power level, and a mob does not become a
+                            -- different mob for having its race read.
+                            if type(rec) == "table" then
+                                if kind ~= "(none)" then rec.kind = kind end
+                                if type(one.race) == "string" and one.race ~= ""
+                                    and one.race ~= "undefined" then
+                                    rec.race = one.race
+                                end
+                            end
                         end
                     end
                 end
