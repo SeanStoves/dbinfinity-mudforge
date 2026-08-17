@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.002",
+    version     = "2026.08.17.003",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -2494,7 +2494,17 @@ local function portraitBody()
         -- seen, and there is no way to notice that from in here.
         local skip = one.cat == "activity" or one.cat == "pvp"
         local cls = "pill"
-        if one.cat == "buff" then cls = "pill good"
+        -- 'transformation' reads as a buff, because that is what it is:
+        --
+        --   { "name": "ssj1",    "category": "transformation" }
+        --   { "name": "powerup", "category": "transformation", "value": 2 }
+        --
+        -- powerup used to arrive as a 'buff' and lost its colour when the
+        -- server moved it. The form pill beside it comes from the plugin's
+        -- own tracking and says the same thing twice for a moment; that is
+        -- worth less than losing the reading altogether.
+        if one.cat == "buff" or one.cat == "transformation" then
+            cls = "pill good"
         elseif one.cat == "debuff" then cls = "pill bad" end
         if not skip then
         local txt = one.name
