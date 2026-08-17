@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.003",
+    version     = "2026.08.17.004",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -3763,7 +3763,21 @@ onAuction = function(data)
     if type(t) == "table" and type(t.auction) == "table" then t = t.auction end
     if type(t) ~= "table" then return end
 
+    -- The item is an OBJECT now, not a name:
+    --
+    --   "auction": { "item": { "name": "An Orange Gi with 'King Kai's' Kanji",
+    --                          "type": "armor", "weight": 1, "value": 100000,
+    --                          "stats": { ... }, "armor": { ... } },
+    --                "bid": 0, "starting": 0, "pulse": 111, "going": 2 }
+    --
+    -- and a table is not a string, so every auction read as "nulled -- the
+    -- auction is over" and cleared. Every catch missed since the server
+    -- changed shape.
+    --
+    -- Both shapes taken. A build still sending the bare name keeps working,
+    -- and there is nothing to tell them apart by except the type.
     local item = t.item
+    if type(item) == "table" then item = item.name end
     if type(item) ~= "string" or item == "" or item == "undefined" then
         -- nulled: the auction is over, whichever way it went
         if charState.auction ~= nil then
