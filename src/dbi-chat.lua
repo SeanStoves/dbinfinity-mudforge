@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-chat",
     name        = "DB Infinity Chat",
-    version     = "2026.08.17.000",
+    version     = "2026.08.17.001",
     author      = "Solao",
     description = "Tabbed chat for Dragonball Infinity, with user-defined captures.",
     settings    = { saveState = true },
@@ -676,14 +676,21 @@ local function tabsHtml()
     local vis, vn = visibleTabs()
     for v = 1, vn do
         local id = vis[v]
-        local on = ""
-        if id == activeId then on = " on" end
+        -- NOT called 'on'. A local of that name anywhere in a file takes the
+        -- global on() down for the whole of it -- the transpiler hoists it to
+        -- module scope, so every reference resolves to this let and anything
+        -- running before this point gets 'Can't find variable: on'. dbtrain
+        -- lost both its event subscriptions that way, silently, for weeks.
+        -- Nothing here calls on() today; this is so that stays true by
+        -- accident rather than becoming a silent failure the day it does.
+        local sel = ""
+        if id == activeId then sel = " on" end
         local badge = ""
         local u = unread[id] or 0
         if id ~= activeId and u > 0 then
             badge = '<span class="u">' .. u .. "</span>"
         end
-        add('<span class="tab' .. on .. '" data-mud-action="tab" data-mud-data="'
+        add('<span class="tab' .. sel .. '" data-mud-action="tab" data-mud-data="'
             .. escapeHtml(id) .. '">' .. escapeHtml(CH_LABEL[id] or id) .. badge .. "</span>")
     end
 
@@ -743,11 +750,11 @@ local function settingsBody()
         if id then
             local kind = "built in"
             if not CH_BUILTIN[id] then kind = "yours" end
-            local on = ""
-            if CH_ON[id] == true then on = " checked" end
+            local chk = ""
+            if CH_ON[id] == true then chk = " checked" end
             add('<label class="row"><span class="nm">' .. escapeHtml(CH_LABEL[id] or id)
                 .. '</span><span class="pat">' .. kind .. "</span>"
-                .. '<input type="checkbox" name="ch:' .. escapeHtml(id) .. '"' .. on
+                .. '<input type="checkbox" name="ch:' .. escapeHtml(id) .. '"' .. chk
                 .. "></label>")
         end
     end

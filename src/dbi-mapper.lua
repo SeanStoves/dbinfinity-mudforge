@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-mapper",
     name        = "DB Infinity Mapper",
-    version     = "2026.08.16.000",
+    version     = "2026.08.17.000",
     author      = "Solao",
     description = "Builds MudForge's map from the room output, for a MUD with no GMCP room data.",
     settings    = { saveState = true },
@@ -742,11 +742,14 @@ local function adoptFromMap()
     local vm = mapGet("dbmap.view")
     if vm == "area" or vm == "local" then view.mode = vm end
 
-    local on = mapGet("dbmap.on")
+    -- NOT called 'on': a local of that name takes the global on() down for
+    -- the whole file. Nothing here calls on(), and this keeps it that way on
+    -- purpose rather than by luck.
+    local want = mapGet("dbmap.on")
     -- 'yes' and 'no' are what versions before the third mode wrote.
-    if on == "record" or on == "follow" or on == "off" then mode = on
-    elseif on == "no" then mode = "off"
-    elseif on == "yes" then mode = "record" end
+    if want == "record" or want == "follow" or want == "off" then mode = want
+    elseif want == "no" then mode = "off"
+    elseif want == "yes" then mode = "record" end
 
     -- Where we were standing. The hash is bound to a vnum in the map, so this
     -- survives anything short of deleting the room -- and the next room line
