@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.001",
+    version     = "2026.08.17.002",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -2483,15 +2483,27 @@ local function portraitBody()
     -- is no list of category names to keep up to date that way.
     local pills = {}
     for _, one in ipairs(effects) do
+        -- Not every category belongs on this panel.
+        --
+        --   activity  'in_combat', which the fighting pill already says
+        --   pvp       'white_pk', a standing flag rather than anything
+        --             happening to the character right now
+        --
+        -- Named rather than whitelisted: a whitelist of wanted categories
+        -- would silently drop every category this MUD grows that we have not
+        -- seen, and there is no way to notice that from in here.
+        local skip = one.cat == "activity" or one.cat == "pvp"
         local cls = "pill"
         if one.cat == "buff" then cls = "pill good"
         elseif one.cat == "debuff" then cls = "pill bad" end
+        if not skip then
         local txt = one.name
         -- short(), the same 18.5M form the power level box uses. A pill is
         -- a few characters wide and a suppression level is eight figures.
         if one.val ~= nil then txt = txt .. " " .. short(one.val) end
         pills[#pills + 1] = '<span class="' .. cls .. '">'
             .. escapeHtml(txt) .. "</span>"
+        end
     end
     if form.name ~= "" then
         pills[#pills + 1] = '<span class="pill good">' .. escapeHtml(form.name) .. "</span>"
