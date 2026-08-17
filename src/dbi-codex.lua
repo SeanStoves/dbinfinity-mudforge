@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.17.001",
+    version     = "2026.08.17.002",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -2829,7 +2829,21 @@ function init()
     -- what the server just said and here() is the client's mapper answering
     -- about wherever it has caught up to.
     --
-    -- Only 'mob'. A player walking past is not a Codex record.
+    -- 'type' does NOT mean mob-or-not. Measured values so far: 'mob' for a
+    -- starship pilot and an Icer Guard, 'pacifist' for a Yardrat Merchant.
+    -- Filtering on type == "mob" dropped every pacifist silently, which read
+    -- exactly like the bug this reader was written to fix -- a mob standing
+    -- in the room, a [scan] link offered for it, and scanall answering that
+    -- there was nothing here to read.
+    --
+    -- So this matches what the line reader accepts and nothing narrower: any
+    -- name that is not a corpse. That reader has run for weeks on 'X is here.'
+    -- with no type field at all, and one rule across both paths beats a
+    -- cleverer rule on one of them.
+    --
+    -- The 'player' rejection is a GUESS and is marked as one: no player has
+    -- been seen in an actors list, so that string is unverified. It is kept
+    -- because it costs nothing and cannot cause the failure above.
     --
     -- Walked with pairs() rather than ipairs or #: an array crossing this
     -- boundary is not reliably 1-indexed -- 0-indexed and object-with-numeric-
@@ -2855,7 +2869,8 @@ function init()
                     -- which is truthy and passes every emptiness check.
                     if type(one) == "table" and type(one.name) == "string"
                         and one.name ~= "" and one.name ~= "undefined"
-                        and one.type == "mob" then
+                        and one.type ~= "player"
+                        and one.name:find("corpse", 1, true) == nil then
                         noteMob(one.name, spot, nil)
                     end
                 end
