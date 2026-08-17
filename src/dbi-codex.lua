@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.17.000",
+    version     = "2026.08.17.001",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -193,7 +193,7 @@ local tried = { name = "", word = "", idx = 0, at = 0 }
 -- gets attached to the right name. Fire three scans together and the outlines
 -- come back with no way to tell whose is whose, and the keyword learned goes
 -- on the wrong mob.
-local bulk = { list = {}, at = 0, on = false }
+local bulk = { list = {}, at = 0, on = false, want = 0 }
 local linkOn = true
 
 -- The vnum we were standing in when the last line came through. Nothing else
@@ -2411,14 +2411,22 @@ local function dexCommand(cmd)
             end
         end
 
-        if rowCount(todo) == 0 then
-            echo(TAG .. "nothing here left to read.", hue.GOLD)
+        -- Anyone waiting on this hears it over the bus, not off the terminal.
+        -- A print from one plugin does not reach another plugin's onLine, so
+        -- dbtrain's explorer sat out its whole backstop in every room while
+        -- the answer was on screen the entire time.
+        local want = rowCount(todo)
+        if want == 0 then
+            echo(TAG .. "no mobs left to read here.", hue.GOLD)
+            emit("dbi-codex.scanall", { room = vnum, mobs = 0, done = true })
             return
         end
         bulk.list = todo
         bulk.on = true
         bulk.at = 0
-        echo(TAG .. "reading " .. rowCount(todo) .. ", one at a time.", hue.GOLD)
+        bulk.want = want
+        bulk.room = vnum
+        echo(TAG .. "reading " .. want .. ", one at a time.", hue.GOLD)
 
     elseif low == "diag" then
         print(TAG .. "instance=" .. INSTANCE)
@@ -2804,6 +2812,57 @@ function init()
         pcall(function() addTimer(waits[1], function() again(1) end) end)
     end
 
+    -- What is standing in the room, off the wire.
+    --
+    --   "info": { "num": 11104, "area": "The Ginyu Base",
+    --             "actors": [ { "name": "An Icer Guard", "type": "mob",
+    --                           "race": "icer" } ] }
+    --
+    -- This is a SECOND source, not a replacement: the line reader still runs
+    -- and still catches what it always did. What GMCP adds is a room's
+    -- occupants without an 'is here.' anchor to match, without a long
+    -- description to guess at, without the player-versus-mob question, and
+    -- without anyone typing 'look'. It arrives on movement, which is exactly
+    -- when dbtrain's explorer asks for a scanall.
+    --
+    -- The room comes off the payload rather than here(), because room.info is
+    -- what the server just said and here() is the client's mapper answering
+    -- about wherever it has caught up to.
+    --
+    -- Only 'mob'. A player walking past is not a Codex record.
+    --
+    -- Walked with pairs() rather than ipairs or #: an array crossing this
+    -- boundary is not reliably 1-indexed -- 0-indexed and object-with-numeric-
+    -- keys have both turned up -- and pairs() is right for all three.
+    pcall(function()
+        onGMCPUpdate("room.info", function(data)
+            pcall(function()
+                if type(data) ~= "table" then return end
+                local box = data
+                if type(box.actors) ~= "table" and type(box.info) == "table" then
+                    box = box.info
+                end
+                local at = safeNum(box.num)
+                if at == nil or type(box.actors) ~= "table" then return end
+
+                local zone = box.area
+                if type(zone) ~= "string" then zone = box.zone end
+                if type(zone) ~= "string" then zone = "" end
+                local spot = { num = at, area = zone }
+
+                for _, one in pairs(box.actors) do
+                    -- A missing GMCP field crosses as the string 'undefined',
+                    -- which is truthy and passes every emptiness check.
+                    if type(one) == "table" and type(one.name) == "string"
+                        and one.name ~= "" and one.name ~= "undefined"
+                        and one.type == "mob" then
+                        noteMob(one.name, spot, nil)
+                    end
+                end
+            end)
+        end)
+    end)
+
     ui.id = createWidget({
         type     = "html",
         name     = "codex",
@@ -3051,7 +3110,10 @@ function init()
                 bulk.list = left
                 if name == nil then
                     bulk.on = false
-                    echo(TAG .. "done reading the room.", hue.GOLD)
+                    local did = safeNum(bulk.want) or 0
+                    echo(TAG .. did .. " mobs scanned.", hue.GOLD)
+                    emit("dbi-codex.scanall",
+                        { room = bulk.room, mobs = did, done = true })
                 else
                     local word = scanKw[keyOf(name)]
                     if type(word) ~= "string" or word == "" then
