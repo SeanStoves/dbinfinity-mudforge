@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.005",
+    version     = "2026.08.18.006",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1730,6 +1730,13 @@ local function css()
     -- What GMCP called the mob: 'pacifist ghetti', 'mob icer'. Dimmed and
     -- shrunk, because it is context for the name rather than a reading --
     -- the power level is the number the eye should land on.
+    -- The whole row opens the mob, so it has to look like it does.
+    add(".dbi-dex .row.pick{cursor:pointer;}")
+    add(".dbi-dex .row.pick:hover .nm{color:" .. hue.GOLD .. ";}")
+    -- The area column, only rendered when the list is not scoped to one.
+    add(".dbi-dex .ar{flex:0 0 auto;color:" .. hue.INK_DIM
+        .. ";font-size:0.85em;margin-right:6px;overflow:hidden;")
+    add("text-overflow:ellipsis;white-space:nowrap;max-width:9em;}")
     add(".dbi-dex .uq{flex:0 0 auto;color:" .. hue.GOLD
         .. ";font-size:0.85em;letter-spacing:.04em;}")
     add(".dbi-dex .kd{flex:0 0 auto;color:" .. hue.INK_DIM
@@ -1909,103 +1916,41 @@ local function mobsBody()
             plTxt = commas(m.pl)
             plCls = ""
         end
-        add('<div class="row"><span class="nm">' .. escapeHtml(m.name) .. "</span>")
-        -- What GMCP called it. Only the mobs seen since this started carrying
-        -- room.info have either, so the span is left off entirely rather than
-        -- printed empty -- an older record should look like a record with
-        -- less on it, not a broken one.
-        local what = ""
-        if type(m.race) == "string" and m.race ~= "" then what = m.race end
-        if type(m.kind) == "string" and m.kind ~= "" then
-            if what ~= "" then what = m.kind .. " " .. what else what = m.kind end
-        end
-        if what ~= "" then
-            add('<span class="kd">' .. escapeHtml(what) .. "</span>")
+
+        -- Name and power, and that is the row.
+        --
+        -- It used to carry the kind, the race, both toggles, the keyword and
+        -- every room the mob had been seen in -- and most mobs here wander a
+        -- neighbourhood, so 'every room' is eighteen of them. Five mobs filled
+        -- the panel and the names were truncating to make space for buttons
+        -- nobody presses most of the time.
+        --
+        -- The whole row opens the mob. Everything else moved in there.
+        add('<div class="row pick" data-mud-action="mob" data-mud-data="'
+            .. escapeHtml(mobKey(m.area, m.name, m.pl)) .. '">')
+
+        -- The AREA only when the list is not already scoped to one. Scoped,
+        -- the header says it and a column repeating it costs the width the
+        -- name is losing.
+        if not hereOnly or filter ~= "" then
+            add('<span class="ar">' .. escapeHtml(tostring(m.area or ""))
+                .. "</span>")
         end
 
-        -- Unique: one of them in this area, and it wanders.
-        --
-        -- Shown as a marker once set and offered as a button while it is not.
-        -- Only offered on something that HAS a reading -- there is nothing to
-        -- pin without one, and a button that refuses when pressed is worse
-        -- than one that is not there.
-        -- Two toggles, and they are different claims.
-        --
-        --   assume  every one of this name in this area is this power
-        --   unique  there is ONE of them, and it wanders
-        --
-        -- Unique is assume plus a merge, so it implies the other and the
-        -- assume toggle is not offered beside it -- two ways to unpin the
-        -- same thing is a way to leave it half-unpinned.
-        --
-        -- Both only where there is a power to pin. A toggle that refuses when
-        -- pressed is worse than one that is not there.
+        add('<span class="nm">' .. escapeHtml(m.name) .. "</span>")
+
+        -- A marker, not a button: the toggles live in the detail now. It is
+        -- here because 'this power was never scanned' is worth seeing while
+        -- scanning down a list.
         local uk = trimBoth(tostring(m.area or "")):lower() .. "|" .. keyOf(m.name)
-        local ident = escapeHtml(m.name) .. "~" .. escapeHtml(tostring(m.area or ""))
         if store.unique[uk] then
-            -- Clickable, so it can be taken back. The MERGE cannot be undone
-            -- and the message says so; the mark and the pin can.
-            add('<span class="uq" data-mud-action="unuq" data-mud-data="'
-                .. ident .. '">unique</span>')
-        elseif safeNum(m.pl) then
-            if store.assume[uk] ~= nil then
-                add('<span class="uq" data-mud-action="unasm" data-mud-data="'
-                    .. ident .. '">assumed</span>')
-            else
-                add('<span class="go2" data-mud-action="asm" data-mud-data="'
-                    .. ident .. '">assume</span>')
-            end
-            add('<span class="go2" data-mud-action="uniq" data-mud-data="'
-                .. ident .. '">uniq</span>')
+            add('<span class="uq">uniq</span>')
+        elseif store.assume[uk] ~= nil then
+            add('<span class="uq">asm</span>')
         end
+
         add('<span class="pl' .. plCls .. '">' .. escapeHtml(plTxt) .. "</span>")
-        -- Only offer to scan what has no reading. The button sends 'scan
-        -- <name>' and nothing else; the reply comes back through the ordinary
-        -- reader.
-        if not safeNum(m.pl) then
-            add('<span class="go" data-mud-action="scan" data-mud-data="'
-                .. escapeHtml(m.name) .. '">scan</span>')
-        end
-
-        -- The word this mob answers to, and a way to change it. Clicking it
-        -- turns this row into a field; anything else stays as it was.
-        if kwEdit == keyOf(m.name) then
-            -- value re-emitted from what has been typed, because a repaint
-            -- that DOES happen would otherwise empty the box
-            -- NO data-mud-action on the form. An action fires on a click
-            -- anywhere inside the element carrying it -- including the input
-            -- -- so clicking into the box saved and closed it. Tabbing in
-            -- worked, which is what gives it away.
-            --
-            -- The form still submits on enter; submit is its own event and
-            -- does not need the attribute.
-            add('<form><input id="dexkw" type="text"'
-                .. ' value="' .. escapeHtml(kwTyped) .. '" size="8"></form>')
-            add('<span class="go" data-mud-action="kwsave">save</span>')
-        else
-            local word = scanKw[keyOf(m.name)]
-            if type(word) ~= "string" or word == "" then word = "kw?" end
-            add('<span class="go2" data-mud-action="kwedit" data-mud-data="'
-                .. escapeHtml(m.name) .. '">' .. escapeHtml(word) .. "</span>")
-        end
         add("</div>")
-
-        -- Vnums, not names. A vnum is what identifies a room and it does not
-        -- rot; the map's own name for 11216 came back as 'Songhold -- Elite
-        -- Quarters&D', damaged upstream and beyond fixing from here. Anything
-        -- that wants a name can ask the mapper for one.
-        local where = roomList(m)
-        if rowCount(where) > 0 then
-            add('<div class="sub">' .. escapeHtml(m.area) .. " &middot; ")
-            for _, n in ipairs(where) do
-                -- Each room is a button that walks you there. The mapper's own
-                -- auto-walker does it, so it honours move delay, fastwalk and
-                -- every lock and weight the map carries.
-                add('<span class="go2" data-mud-action="goto" data-mud-data="'
-                    .. tostring(n) .. '">' .. tostring(n) .. "</span>")
-            end
-            add("</div>")
-        end
 
         end
     end
@@ -2059,6 +2004,102 @@ end
 -- other label analyze printed, then what it said verbatim. A record that cannot
 -- be read back in full is a record that quietly loses whatever nobody thought
 -- to parse -- so the raw block is kept and shown, not just the parsed parts.
+-- One mob, in full.
+--
+-- Everything the row used to carry: what it is, the rooms it patrols, the
+-- word it answers to, and the two claims that can be made about it.
+local function mobDetailBody()
+    local m = store.mobs[ui.detail]
+    if type(m) ~= "table" then
+        ui.detail = ""
+        return mobsBody()
+    end
+
+    local t = {}
+    local function add(x) t[#t + 1] = x end
+
+    add('<div class="head"><span class="tb" data-mud-action="back">back</span>')
+    add('<span class="dn">' .. escapeHtml(m.name) .. "</span></div>")
+
+    local function line(k, v)
+        add('<div class="row"><span class="dk">' .. escapeHtml(k) .. "</span>")
+        add('<span class="dv">' .. v .. "</span></div>")
+    end
+
+    line("area", escapeHtml(tostring(m.area or "")))
+
+    local plTxt = "never scanned"
+    if safeNum(m.pl) then plTxt = commas(m.pl) end
+    line("power", escapeHtml(plTxt))
+
+    local what = ""
+    if type(m.race) == "string" and m.race ~= "" then what = m.race end
+    if type(m.kind) == "string" and m.kind ~= "" then
+        if what ~= "" then what = m.kind .. " " .. what else what = m.kind end
+    end
+    if what ~= "" then line("kind", escapeHtml(what)) end
+
+    -- The word it answers to, and a way to change it.
+    local kw = ""
+    if kwEdit == keyOf(m.name) then
+        -- NO data-mud-action on the form: an action fires on a click anywhere
+        -- inside the element carrying it, including the input, so clicking
+        -- into the box would save and close it.
+        kw = '<form><input id="dexkw" type="text" value="'
+            .. escapeHtml(kwTyped) .. '" size="10"></form>'
+            .. '<span class="go" data-mud-action="kwsave">save</span>'
+    else
+        local word = scanKw[keyOf(m.name)]
+        if type(word) ~= "string" or word == "" then word = "kw?" end
+        kw = '<span class="go2" data-mud-action="kwedit" data-mud-data="'
+            .. escapeHtml(m.name) .. '">' .. escapeHtml(word) .. "</span>"
+    end
+    line("keyword", kw)
+
+    -- The two claims. Different things, so two toggles -- see the handlers.
+    local uk = trimBoth(tostring(m.area or "")):lower() .. "|" .. keyOf(m.name)
+    local ident = escapeHtml(m.name) .. "~" .. escapeHtml(tostring(m.area or ""))
+    local marks = ""
+    if store.unique[uk] then
+        marks = '<span class="uq" data-mud-action="unuq" data-mud-data="'
+            .. ident .. '">unique &mdash; click to unmark</span>'
+    elseif safeNum(m.pl) then
+        if store.assume[uk] ~= nil then
+            marks = '<span class="uq" data-mud-action="unasm" data-mud-data="'
+                .. ident .. '">assumed &mdash; click to lift</span>'
+        else
+            marks = '<span class="go2" data-mud-action="asm" data-mud-data="'
+                .. ident .. '">assume</span>'
+        end
+        marks = marks .. '<span class="go2" data-mud-action="uniq" '
+            .. 'data-mud-data="' .. ident .. '">uniq</span>'
+    else
+        marks = '<span class="go" data-mud-action="scan" data-mud-data="'
+            .. escapeHtml(m.name) .. '">scan</span>'
+    end
+    line("power is", marks)
+
+    -- Vnums, not names. A vnum identifies a room and does not rot; the map's
+    -- own name for 11216 came back damaged upstream and beyond fixing here.
+    --
+    -- And these are a CATCHMENT rather than addresses: most mobs here wander
+    -- a neighbourhood, and commonly several of a kind patrol it at once. The
+    -- list says where the kind lives, not where this one is standing.
+    local where = roomList(m)
+    if rowCount(where) > 0 then
+        add('<div class="sec">seen in ' .. rowCount(where) .. ' room(s)')
+        add(" &mdash; they wander, so this is the patch and not an address</div>")
+        add('<div class="sub">')
+        for _, n in ipairs(where) do
+            add('<span class="go2" data-mud-action="goto" data-mud-data="'
+                .. tostring(n) .. '">' .. tostring(n) .. "</span>")
+        end
+        add("</div>")
+    end
+
+    return table.concat(t)
+end
+
 local function detailBody()
     local it = store.items[ui.detail]
     if type(it) ~= "table" then
@@ -2348,6 +2389,8 @@ local function render()
     ui.pageBar = ""
     if ui.detail ~= "" and ui.view == "items" then
         inner = detailBody()
+    elseif ui.detail ~= "" and ui.view == "mobs" then
+        inner = mobDetailBody()
     elseif ui.view == "items" then
         inner = itemsBody()
     elseif ui.view == "trainers" then
@@ -3406,6 +3449,15 @@ function init()
                 safeRender()
                 saveAll()
             end
+        elseif act == "mob" then
+            -- Checked against what is actually stored rather than trusted:
+            -- this went out as markup and came back through the client.
+            if type(store.mobs[arg]) == "table" then
+                ui.detail = arg
+                ui.view = "mobs"
+                safeRender()
+            end
+
         elseif act == "item" then
             -- Checked against what is actually stored rather than trusted: this
             -- went out as markup and came back through the client.
