@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.006",
+    version     = "2026.08.18.007",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -204,15 +204,24 @@ local lastArea = ""
 ui.h = 420
 ui.page = 1
 
--- Roughly what a row costs. A mob is its name and a line of rooms under it; an
--- item is its name and a line of detail. Both are about two lines of text plus
--- the padding, and the chrome above is the bar, the search box, the header line
--- and the pager itself.
-ui.ROW_PX = 34
+-- Roughly what a row costs, and it is no longer the same for both lists.
+--
+-- A mob was its name plus a line of rooms underneath -- two lines, 34px. It
+-- is one line now: the rooms moved into the detail, because most mobs here
+-- wander a neighbourhood and 'every room' is eighteen of them. So a page of
+-- eight filled the panel before and leaves half of it empty today.
+--
+-- An item is still name plus a line of detail, so it keeps the old figure.
+-- One constant for both is what made this wrong the moment the mob row
+-- changed, and would make it wrong again the next time either moves.
+ui.MOB_PX = 22
+ui.ITEM_PX = 34
 ui.CHROME_PX = 116
 
 local function perPage()
-    local n = math.floor((ui.h - ui.CHROME_PX) / ui.ROW_PX)
+    local row = ui.ITEM_PX
+    if ui.view == "mobs" then row = ui.MOB_PX end
+    local n = math.floor((ui.h - ui.CHROME_PX) / row)
     if n < 3 then return 3 end
     if n > 40 then return 40 end
     return n
