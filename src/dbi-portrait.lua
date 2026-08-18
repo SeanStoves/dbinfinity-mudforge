@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.18.000",
+    version     = "2026.08.18.001",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -154,6 +154,7 @@ local form = {}
 form.ALL = {}
 form.url = ""           -- the active form's image, "" = base
 form.name = ""
+form.added = false      -- a form the server named that was not in the list
 
 -- char.vitals, owned copy
 -- What you are actually doing, watched off the lines that say so.
@@ -1518,15 +1519,38 @@ local function formFromEffects(list)
     local newName, newUrl = "", ""
     if found ~= "" then
         newName = found
-        -- Configured? Then its picture. Named by the server but never given
-        -- one here, and the panel says what you are without inventing an
-        -- image for it.
+        -- Configured? Then its picture.
+        local known = false
         for name, f in pairs(form.ALL) do
             if type(f) == "table" and tostring(name):lower() == found:lower() then
                 if has(f.url) then newUrl = tostring(f.url) end
                 newName = name
+                known = true
                 break
             end
+        end
+
+        -- Not configured? ADD it, with no picture.
+        --
+        -- The server knows every form this character has; nobody should have
+        -- to type them in to find out what they are called. A row appears in
+        -- the settings the first time one is entered, and it sits there empty
+        -- until an image is given to it -- which is also the list of forms
+        -- still needing one.
+        --
+        -- No pattern either. That is the trigger's business and the trigger
+        -- is not what found this; leaving it empty means matchForm ignores
+        -- the row, so an empty pattern cannot match every line.
+        --
+        -- Never touches an existing row. A form set up by hand keeps its
+        -- picture and its announcement.
+        -- Flagged rather than saved here. saveSettings is a file-scope
+        -- local declared a long way below this, and calling it from up here
+        -- resolves as a nil global -- the linter catches that one, and the
+        -- caller is past the declaration anyway.
+        if not known then
+            form.ALL[found] = { pat = "", url = "" }
+            form.added = true
         end
     end
 
@@ -5966,6 +5990,10 @@ function init()
         effects = now
         effectsSeen = true
         formFromEffects(now)
+        if form.added then
+            form.added = false
+            saveSettings()
+        end
         safeRender()
     end
     onGMCPUpdate("char.effects", onEffects)
