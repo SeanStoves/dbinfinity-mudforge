@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-map",
     name        = "DB Infinity Scouter",
-    version     = "2026.08.17.000",
+    version     = "2026.08.18.000",
     author      = "Solao",
     description = "Dragonball Infinity's GMCP map, rendered as a scouter readout.",
     settings    = { saveState = true },
@@ -91,6 +91,9 @@ glass.ALL = {
     cyan   = { edge = "#25f0ff", lit = "#8ff4ff", dim = "#2a7480" },
     red    = { edge = "#ff4b4b", lit = "#ff9b9b", dim = "#8a3030" },
     yellow = { edge = "#ffd21f", lit = "#ffe98a", dim = "#8a7420" },
+    -- Gold is its own lens here, not a shade of yellow: the MUD prints
+    -- 'gold-crystal' and colours it differently from its yellow.
+    gold   = { edge = "#ffbf3c", lit = "#ffdc94", dim = "#8a6520" },
     orange = { edge = "#ff9a3c", lit = "#ffc48f", dim = "#8a5726" },
     purple = { edge = "#b06bff", lit = "#d3aeff", dim = "#5f3a8a" },
     pink   = { edge = "#ff6bc7", lit = "#ffaddf", dim = "#8a3a6d" },
@@ -146,6 +149,9 @@ local function darken(hex, f)
 end
 
 glass.cur       = "green"
+-- Set by hand, so equipment must not override it. Cleared with
+-- 'dbscout lens auto', which is what follows the scouter on your face.
+glass.manual    = false
 -- Raised when a line changed the lens. readComms sits four hundred lines above
 -- applyLens and saveSettings, so it cannot call either; handleLine can, and
 -- does, on the way back out.
@@ -1515,6 +1521,7 @@ local function saveSettings()
     setVariable("panelAlpha", tostring(ui.alpha))
     setVariable("stripFrame", ui.stripFrame and "yes" or "no")
     setVariable("lens", glass.cur)
+    setVariable("lensManual", tostring(glass.manual))
 end
 
 -- The frame fill is the client's, the lens fill is ours; both have to move
@@ -1845,12 +1852,70 @@ function init()
     if pa and pa >= 0 and pa <= 1 then ui.alpha = pa end
     if getVariable("stripFrame") == "no" then ui.stripFrame = false end
     setLens(getVariable("lens"))
+    glass.manual = (tostring(getVariable("lensManual")) == "true")
 
     makeWidget()
 
     -- Anything asking who owns the handshake gets an answer, whatever order the
     -- plugins happened to load in.
     on("dbi.gmcp.who", function() claimGmcp() end)
+
+    -- The lens on your face, off char.equipment.
+    --
+    --   A scouter with a blue-crystal lens
+    --   A scouter with a gold-crystal lens
+    --
+    -- The MUD names a scouter by its lens and even colours the words, and
+    -- those are the same handful of colours this panel already has -- which
+    -- is what the note by glass.ALL has been waiting for.
+    --
+    -- EQUIPMENT only, never inventory. A spare scouter in a bag is not what
+    -- you are looking through, and tinting the panel from one would be a
+    -- readout of the wrong instrument.
+    --
+    -- A lens word nobody has a colour for changes NOTHING. There is one
+    -- sample of this format per colour and no list of what exists, so an
+    -- unknown word means the palette has not caught up yet -- leaving the
+    -- panel as it was is the honest answer, and guessing a colour from a name
+    -- is how 'a-a-a.png' happened in Portrait.
+    local function onGear(data)
+        pcall(function()
+            if glass.manual then return end
+            local box = data
+            if type(box) == "table" and type(box.equipment) == "table" then
+                box = box.equipment
+            end
+            if type(box) ~= "table" then return end
+            local arr, n = normArray(box.items)
+            for i = 1, n do
+                local it = arr[i]
+                if type(it) == "table" and type(it.name) == "string" then
+                    local low = it.name:lower()
+                    if low:find("scouter", 1, true) ~= nil then
+                        -- '<colour>-crystal lens'. %S+ rather than %a+: a
+                        -- letter class inside a bracket does not survive this
+                        -- runtime's pattern translation.
+                        local word = low:match("(%S+)%-crystal")
+                        if type(word) == "string" and glass.ALL[word] ~= nil
+                            and word ~= glass.cur then
+                            if setLens(word) then
+                                saveSettings()
+                                applyLens()
+                                safeRender()
+                                echo(TAG .. "lens: " .. word
+                                    .. ", off the scouter you are wearing. "
+                                    .. "'dbscout lens <colour>' to override.",
+                                    hue.ALERT)
+                            end
+                        end
+                        return
+                    end
+                end
+            end
+        end)
+    end
+    onGMCPUpdate("char.equipment", onGear)
+    onGMCPUpdate("Char.Equipment", onGear)
 
     onGMCPUpdate("Map.Definition", function(data)
         local ok, err = pcall(function() acceptDefinition(data) end)
@@ -1989,21 +2054,34 @@ function init()
             local names = {}
             for name in pairs(glass.ALL) do names[#names + 1] = name end
             table.sort(names)
-            echo(TAG .. "lens: " .. glass.cur, hue.ALERT)
-            echo("         dbscout lens " .. table.concat(names, " | "), hue.ALERT)
+            local how = "following the scouter you are wearing"
+            if glass.manual then how = "held by hand" end
+            echo(TAG .. "lens: " .. glass.cur .. " -- " .. how, hue.ALERT)
+            echo("         dbscout lens " .. table.concat(names, " | ")
+                .. " | auto", hue.ALERT)
 
         elseif cmd:sub(1, 5) == "lens " or cmd:sub(1, 7) == "colour "
             or cmd:sub(1, 6) == "color " then
             local want = trimRight(cmd:match("^%S+%s+(.*)$") or "")
+            if want:lower() == "auto" then
+                glass.manual = false
+                saveSettings()
+                echo(TAG .. "lens follows the scouter you are wearing.",
+                    hue.ALERT)
+                return
+            end
             if not setLens(want) then
                 echo(TAG .. "no lens called '" .. tostring(want)
                     .. "'. 'dbscout lens' lists them.", "#ff6666")
                 return
             end
+            -- Chosen by hand, so equipment stops changing it.
+            glass.manual = true
             saveSettings()
             applyLens()
             safeRender()
-            echo(TAG .. "lens: " .. glass.cur, hue.ALERT)
+            echo(TAG .. "lens: " .. glass.cur .. " (held -- 'dbscout lens "
+                .. "auto' to follow the scouter again).", hue.ALERT)
 
         elseif cmd == "comms" then
             -- The panel fills itself in from the reply; this is just the ask.
