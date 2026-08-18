@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.004",
+    version     = "2026.08.18.005",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -1929,13 +1929,34 @@ local function mobsBody()
         -- Only offered on something that HAS a reading -- there is nothing to
         -- pin without one, and a button that refuses when pressed is worse
         -- than one that is not there.
+        -- Two toggles, and they are different claims.
+        --
+        --   assume  every one of this name in this area is this power
+        --   unique  there is ONE of them, and it wanders
+        --
+        -- Unique is assume plus a merge, so it implies the other and the
+        -- assume toggle is not offered beside it -- two ways to unpin the
+        -- same thing is a way to leave it half-unpinned.
+        --
+        -- Both only where there is a power to pin. A toggle that refuses when
+        -- pressed is worse than one that is not there.
         local uk = trimBoth(tostring(m.area or "")):lower() .. "|" .. keyOf(m.name)
+        local ident = escapeHtml(m.name) .. "~" .. escapeHtml(tostring(m.area or ""))
         if store.unique[uk] then
-            add('<span class="uq">unique</span>')
+            -- Clickable, so it can be taken back. The MERGE cannot be undone
+            -- and the message says so; the mark and the pin can.
+            add('<span class="uq" data-mud-action="unuq" data-mud-data="'
+                .. ident .. '">unique</span>')
         elseif safeNum(m.pl) then
+            if store.assume[uk] ~= nil then
+                add('<span class="uq" data-mud-action="unasm" data-mud-data="'
+                    .. ident .. '">assumed</span>')
+            else
+                add('<span class="go2" data-mud-action="asm" data-mud-data="'
+                    .. ident .. '">assume</span>')
+            end
             add('<span class="go2" data-mud-action="uniq" data-mud-data="'
-                .. escapeHtml(m.name) .. "~" .. escapeHtml(tostring(m.area or ""))
-                .. '">uniq</span>')
+                .. ident .. '">uniq</span>')
         end
         add('<span class="pl' .. plCls .. '">' .. escapeHtml(plTxt) .. "</span>")
         -- Only offer to scan what has no reading. The button sends 'scan
@@ -3394,6 +3415,71 @@ function init()
                 srcOpen = false
                 safeRender()
             end
+        elseif act == "asm" or act == "unasm" or act == "unuq" then
+            -- Split on '~' and NOT on '|': a literal pipe is alternation once
+            -- translated, and the empty alternative hands back an undefined
+            -- capture that tostring turns into "undefined".
+            local nm, zone = arg:match("^([^~]*)~(.*)$")
+            if type(nm) ~= "string" or nm == "" then return end
+            if type(zone) ~= "string" then zone = "" end
+            local uk = trimBoth(zone):lower() .. "|" .. keyOf(nm)
+
+            if act == "asm" then
+                -- The power it was SCANNED at. A row is no place to type a
+                -- number, and the number that matters is the one already
+                -- recorded -- 'dbdex assume <pl> <name>' is still there for a
+                -- figure that came from somewhere else.
+                local pl = nil
+                for _, v in pairs(store.mobs) do
+                    if type(v) == "table" and type(v.name) == "string"
+                        and keyOf(v.name) == keyOf(nm)
+                        and trimBoth(tostring(v.area or "")):lower() == trimBoth(zone):lower() then
+                        pl = safeNum(v.pl)
+                        if pl ~= nil then break end
+                    end
+                end
+                if pl == nil then
+                    echo(TAG .. nm .. " has no reading to assume from.", "#ff6666")
+                    return
+                end
+                store.assume[uk] = pl
+                saveAll()
+                safeRender()
+                echo(TAG .. "!! ASSUMED, NOT SCANNED !!", "#ff3333")
+                echo("   every " .. nm .. " in " .. zone .. " will be treated "
+                    .. "as " .. commas(pl) .. " without being read.", "#ff3333")
+                echo("   hunting picks fights on it and suppress sets a level "
+                    .. "from it, the same as a real scan.", "#ff3333")
+                return
+            end
+
+            -- Rebuilt, not keyed to nil: a key set to nil is not reliably
+            -- gone here, and a pin that will not lift is worse than one that
+            -- was never set.
+            local kept = {}
+            for k, v in pairs(store.assume) do
+                if k ~= uk then kept[k] = v end
+            end
+            store.assume = kept
+
+            if act == "unuq" then
+                local keptU = {}
+                for k, v in pairs(store.unique) do
+                    if k ~= uk then keptU[k] = v end
+                end
+                store.unique = keptU
+                echo(TAG .. nm .. " is no longer marked unique in " .. zone
+                    .. ", and its power is not assumed.", hue.GOLD)
+                echo("   the records that were MERGED into one stay merged. "
+                    .. "That part cannot be undone.", hue.GOLD)
+            else
+                echo(TAG .. nm .. " is no longer assumed in " .. zone
+                    .. " -- it will want scanning again.", hue.GOLD)
+            end
+            saveAll()
+            safeRender()
+            return
+
         elseif act == "uniq" then
             -- 'name~area'. Split on '~' and NOT on '|': a literal pipe is
             -- alternation once the pattern is translated, and an empty
