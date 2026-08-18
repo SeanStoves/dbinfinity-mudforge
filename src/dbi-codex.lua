@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.002",
+    version     = "2026.08.18.003",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -135,6 +135,21 @@ store.hereNow = { vnum = nil, names = {} }
 -- Declared per AREA rather than globally, because the reason the key carries
 -- an area is that a name means different things in different places.
 store.assume = {}
+
+-- Mobs marked UNIQUE: one of them in the area, and it wanders.
+--
+--   store.unique["the ginyu base|zarbon"] = true
+--
+-- Set by hand from the panel, and that is the whole safety story -- marking
+-- one wrongly is the user saying something untrue about their own game, and
+-- nothing here can check it. What it buys is the case the key cannot express:
+-- a mob keyed by area + name + POWER is several records when the same
+-- creature is scanned at different moments, and a wanderer with one power is
+-- exactly that.
+--
+-- Marking it merges those records into the scanned one and pins the power, so
+-- there is nothing left to scan and no spawn point to learn.
+store.unique = {}
 
 -- Who teaches what, keyed by room.
 --
@@ -568,6 +583,89 @@ local function mobKey(area, name, pl)
     local p = "?"
     if safeNum(pl) then p = tostring(safeNum(pl)) end
     return trimBoth(area):lower() .. "|" .. keyOf(name) .. "|" .. p
+end
+
+-- Mark a name UNIQUE in an area: one creature, wandering, one power level.
+--
+-- Codex keys a mob by area + name + POWER, which is right when the same name
+-- is several creatures -- 'An elite warrior' runs 1m to 20m in The Ginyu Base
+-- and filing them together would put a 20m mob behind a 1m reading. It is
+-- wrong for a wanderer: one creature scanned at two moments becomes two
+-- records, and neither knows about the other's rooms.
+--
+-- So this MERGES. Every record of that name in that area collapses into the
+-- one that has a reading, keeping every room any of them had seen, and the
+-- power is pinned so nothing scans it again.
+--
+-- DESTRUCTIVE and not undoable. The records that go had readings of their
+-- own; if two of them genuinely were different creatures, marking this says
+-- otherwise and the smaller reading is gone. That is a claim about the game
+-- that only the user can make, and getting it wrong is on them -- which is
+-- why it is a button rather than something inferred.
+--
+-- Needs a scan to merge TO. Without one there is no power to pin and nothing
+-- to be gained, so it refuses rather than inventing a number.
+local function markUnique(area, name)
+    local zone = trimBoth(area):lower()
+    local key = keyOf(name)
+    if zone == "" or key == "" then return nil, "no area" end
+
+    -- The reading to keep: the highest scanned power for that name here.
+    -- Highest rather than newest, because a suppressed reading is lower than
+    -- the truth and never higher.
+    local best, bestPl, keep = nil, nil, nil
+    local mine, mn = {}, 0
+    for k, v in pairs(store.mobs) do
+        if type(v) == "table" and type(v.name) == "string"
+            and trimBoth(tostring(v.area or "")):lower() == zone
+            and keyOf(v.name) == key then
+            mn = mn + 1
+            mine[mn] = k
+            local pl = safeNum(v.pl)
+            if pl ~= nil and (bestPl == nil or pl > bestPl) then
+                best, bestPl, keep = k, pl, v
+            end
+        end
+    end
+
+    if mn == 0 then return nil, "not recorded here" end
+    if bestPl == nil then return nil, "never scanned" end
+
+    -- One record, carrying every room any of them had seen.
+    local rooms = {}
+    for i = 1, mn do
+        local v = store.mobs[mine[i]]
+        if type(v) == "table" and type(v.rooms) == "table" then
+            for rk, rv in pairs(v.rooms) do
+                if safeNum(rv) ~= nil then rooms[rk] = rv end
+            end
+        end
+    end
+    keep.rooms = rooms
+    keep.pl = bestPl
+    keep.unique = true
+
+    -- Rebuilt rather than keyed to nil. Setting a table key to nil does not
+    -- reliably remove it here, and a record that will not go away is exactly
+    -- the duplicate this exists to collapse.
+    local kept = {}
+    for k, v in pairs(store.mobs) do
+        local drop = false
+        for i = 1, mn do
+            if mine[i] == k then drop = true break end
+        end
+        if not drop then kept[k] = v end
+    end
+    kept[mobKey(keep.area, keep.name, bestPl)] = keep
+    store.mobs = kept
+
+    store.unique[zone .. "|" .. key] = true
+    -- Pinned through the same path a declared power uses, so a sighting fills
+    -- in without a scan and there is one mechanism rather than two.
+    store.assume[zone .. "|" .. key] = bestPl
+    -- The CALLER saves. saveAll is a file-scope local declared a long way
+    -- below this, and calling it from up here resolves as a nil global.
+    return bestPl, mn
 end
 
 -- A mob with no sightings left is not a mob. The unknown bucket empties as its
@@ -1482,7 +1580,8 @@ local function saveAll()
                            kw = scanKw, trainers = store.trainers,
                            seenTypes = store.seenTypes,
                            skipTypes = store.skipTypes,
-                           assume = store.assume }, "global")
+                           assume = store.assume,
+                           unique = store.unique }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
@@ -1513,6 +1612,12 @@ local function loadAll()
 
     -- Merged rather than replaced, so the seeded types survive a store written
     -- before they existed.
+    if type(p.unique) == "table" then
+        for k, v in pairs(p.unique) do
+            if type(k) == "string" and v == true then store.unique[k] = true end
+        end
+    end
+
     if type(p.assume) == "table" then
         for k, v in pairs(p.assume) do
             if type(k) == "string" and safeNum(v) ~= nil then
@@ -1614,6 +1719,8 @@ local function css()
     -- What GMCP called the mob: 'pacifist ghetti', 'mob icer'. Dimmed and
     -- shrunk, because it is context for the name rather than a reading --
     -- the power level is the number the eye should land on.
+    add(".dbi-dex .uq{flex:0 0 auto;color:" .. hue.GOLD
+        .. ";font-size:0.85em;letter-spacing:.04em;}")
     add(".dbi-dex .kd{flex:0 0 auto;color:" .. hue.INK_DIM
         .. ";font-size:0.85em;opacity:0.8;}")
     add(".dbi-dex .pl.none{color:" .. hue.UNKNOWN .. ";}")
@@ -1789,6 +1896,21 @@ local function mobsBody()
         end
         if what ~= "" then
             add('<span class="kd">' .. escapeHtml(what) .. "</span>")
+        end
+
+        -- Unique: one of them in this area, and it wanders.
+        --
+        -- Shown as a marker once set and offered as a button while it is not.
+        -- Only offered on something that HAS a reading -- there is nothing to
+        -- pin without one, and a button that refuses when pressed is worse
+        -- than one that is not there.
+        local uk = trimBoth(tostring(m.area or "")):lower() .. "|" .. keyOf(m.name)
+        if store.unique[uk] then
+            add('<span class="uq">unique</span>')
+        elseif safeNum(m.pl) then
+            add('<span class="go2" data-mud-action="uniq" data-mud-data="'
+                .. escapeHtml(m.name) .. "~" .. escapeHtml(tostring(m.area or ""))
+                .. '">uniq</span>')
         end
         add('<span class="pl' .. plCls .. '">' .. escapeHtml(plTxt) .. "</span>")
         -- Only offer to scan what has no reading. The button sends 'scan
@@ -3247,6 +3369,37 @@ function init()
                 srcOpen = false
                 safeRender()
             end
+        elseif act == "uniq" then
+            -- 'name~area'. Split on '~' and NOT on '|': a literal pipe is
+            -- alternation once the pattern is translated, and an empty
+            -- alternative matches at offset zero -- which hands back an
+            -- undefined capture that tostring turns into the string
+            -- "undefined". That went to the MUD once already.
+            local nm, zone = arg:match("^([^~]*)~(.*)$")
+            if type(nm) ~= "string" or nm == "" then return end
+            if type(zone) ~= "string" then zone = "" end
+
+            local pl, howMany = markUnique(zone, nm)
+            if pl == nil then
+                echo(TAG .. "cannot mark " .. nm .. " unique: "
+                    .. tostring(howMany) .. ".", "#ff6666")
+                return
+            end
+            saveAll()
+            safeRender()
+
+            echo(TAG .. nm .. " is unique in " .. zone .. " at "
+                .. commas(pl) .. ".", hue.GOLD)
+            if howMany > 1 then
+                echo("   " .. howMany .. " records of that name here were "
+                    .. "merged into one. That cannot be undone -- if any of "
+                    .. "them", "#ff3333")
+                echo("   were genuinely a different creature, their readings "
+                    .. "are gone.", "#ff3333")
+            end
+            echo("   it will be filled in at that power from now on, with no "
+                .. "scan.", hue.GOLD)
+
         elseif act == "srcs" then
             srcOpen = not srcOpen
             safeRender()
