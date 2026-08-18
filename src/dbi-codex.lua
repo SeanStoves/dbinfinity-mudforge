@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.17.004",
+    version     = "2026.08.18.000",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -95,6 +95,29 @@ store.items = {}
 -- guess -- no player has ever been seen in an actors list.
 store.seenTypes = { mob = { n = 0, eg = "" }, pacifist = { n = 0, eg = "" } }
 store.skipTypes = { player = true }
+
+-- Who is standing here RIGHT NOW, off the last room.info.
+--
+--   hereNow.vnum   the room it describes
+--   hereNow.names  [lowercased name] = true
+--
+-- Not saved. It is true for as long as nobody moves, which is not long.
+--
+-- This exists because 'They aren't here.' stopped meaning what it used to.
+-- When the only source was 'X is here.' in the room description, a scan we
+-- had just offered could safely read that answer as a wrong keyword -- the
+-- mob was printed a moment ago, so it was there. Reading the room off GMCP
+-- broke that: scanall works from what was RECORDED in this room, which
+-- includes a wanderer from an earlier visit that has since walked off, and
+-- then the keyword chain burns every candidate on a mob that is not present:
+--
+--   'An Orange Striped Kendo Fighter' does not answer to that; trying 'striped'.
+--   'An Orange Striped Kendo Fighter' does not answer to that; trying 'kendo'.
+--   'An Orange Striped Kendo Fighter' does not answer to that; trying 'fighter'.
+--
+-- Four scans, and worse than wasted: a keyword that was never tested is not a
+-- keyword that is wrong, and the chain was on its way to recording one.
+store.hereNow = { vnum = nil, names = {} }
 
 -- Who teaches what, keyed by room.
 --
@@ -944,6 +967,23 @@ local function feedScan(clean)
     -- allowed to answer in, and only forward through the candidate list.
     if clean == "They aren't here." and tried.word ~= "" and tried.idx > 0
         and os.time() - tried.at <= SCAN_WAIT then
+        -- Unless it really has gone. GMCP says who is standing here, so when
+        -- the name is not among them the answer is literally true and no
+        -- keyword will help -- burning the rest of the list on it is four
+        -- wasted scans and, worse, on its way to recording a keyword that was
+        -- never actually tested.
+        --
+        -- Only when hereNow describes THIS room. A stale one from the room
+        -- behind us would refuse every scan we have.
+        local at = here()
+        local sameRoom = type(at) == "table" and store.hereNow.vnum ~= nil
+            and safeNum(at.num) == store.hereNow.vnum
+        if sameRoom and not store.hereNow.names[tried.name:lower()] then
+            echo(TAG .. tried.name .. " has left; not chasing it.", hue.GOLD)
+            tried.word = ""
+            return true
+        end
+
         local words = keywords(tried.name)
         local nxt = words[tried.idx + 1]
         tried.idx = tried.idx + 1
@@ -2971,6 +3011,11 @@ function init()
                 if type(zone) ~= "string" then zone = "" end
                 local spot = { num = at, area = zone }
 
+                -- Rebuilt, not cleared and refilled: setting a key to nil
+                -- does not reliably remove it here, so an emptied table would
+                -- go on reporting whoever used to be in it.
+                store.hereNow = { vnum = at, names = {} }
+
                 for _, one in pairs(box.actors) do
                     -- A missing GMCP field crosses as the string 'undefined',
                     -- which is truthy and passes every emptiness check.
@@ -2983,6 +3028,8 @@ function init()
                         local kind = one.type
                         if type(kind) ~= "string" or kind == ""
                             or kind == "undefined" then kind = "(none)" end
+                        store.hereNow.names[one.name:lower()] = true
+
                         local row = store.seenTypes[kind]
                         if type(row) ~= "table" then row = { n = 0, eg = "" } end
                         row.n = row.n + 1
