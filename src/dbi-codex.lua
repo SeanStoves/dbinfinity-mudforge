@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.000",
+    version     = "2026.08.18.001",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -2542,10 +2542,27 @@ local function dexCommand(cmd)
             return
         end
 
+        -- Built from what is RECORDED in this room, then narrowed to who is
+        -- actually standing in it.
+        --
+        -- Without the narrowing, every previous occupant of a room gets a
+        -- scan on every return visit: a wanderer noted an hour ago is still
+        -- filed here, still has no power level, and still looks like work to
+        -- do. Measured over one Capsule Corporation run, 120 scans went out
+        -- for mobs that had walked off -- each one a command, a round trip,
+        -- and a 'They aren't here.' to read.
+        --
+        -- Only when hereNow describes THIS room. With nothing to narrow by,
+        -- the old behaviour stands: scanning something that has left costs a
+        -- command, and scanning nothing costs the reading entirely.
+        local live = nil
+        if store.hereNow.vnum == vnum then live = store.hereNow.names end
+
         local todo = {}
         for _, v in pairs(store.mobs) do
             if type(v) == "table" and type(v.name) == "string"
-                and safeNum(v.pl) == nil then
+                and safeNum(v.pl) == nil
+                and (live == nil or live[v.name:lower()]) then
                 for _, r in ipairs(roomList(v)) do
                     if r == vnum then
                         push(todo, v.name)
