@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.17.007",
+    version     = "2026.08.18.000",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -1479,6 +1479,57 @@ local function feedForm(clean)
         newUrl = ""
         newName = ""
     end
+    if form.url == newUrl and form.name == newName then return false end
+    form.url = newUrl
+    form.name = newName
+    return true
+end
+
+-- The form, off the wire instead of off a line of text.
+--
+--   { "name": "ssj1",    "category": "transformation" }
+--   { "name": "powerup", "category": "transformation", "value": 2 }
+--
+-- POWERUP IS NOT A FORM, and it is filed under the same category, so the
+-- category alone cannot be the test. Excluded by name: it is a multiplier on
+-- the base body, not a different body, and there is no avatar for it.
+--
+-- The triggers stay. They read the announcement as it is printed, which is
+-- the instant the change happens; the packet follows. Whichever arrives first
+-- sets the form and the other agrees -- and the trigger path is still the
+-- only one that works for a form the server does not name.
+--
+-- No transformation at all means base. That is the case the triggers cannot
+-- see: dropping out of a form prints nothing reliable, and a portrait stuck
+-- in ssj1 after reverting is the same stale lie as a stale opponent bar.
+local function formFromEffects(list)
+    if type(list) ~= "table" then return false end
+
+    local found = ""
+    for _, e in ipairs(list) do
+        if type(e) == "table" and type(e.name) == "string"
+            and tostring(e.cat or ""):lower() == "transformation"
+            and e.name:lower() ~= "powerup" then
+            found = e.name
+            break
+        end
+    end
+
+    local newName, newUrl = "", ""
+    if found ~= "" then
+        newName = found
+        -- Configured? Then its picture. Named by the server but never given
+        -- one here, and the panel says what you are without inventing an
+        -- image for it.
+        for name, f in pairs(form.ALL) do
+            if type(f) == "table" and tostring(name):lower() == found:lower() then
+                if has(f.url) then newUrl = tostring(f.url) end
+                newName = name
+                break
+            end
+        end
+    end
+
     if form.url == newUrl and form.name == newName then return false end
     form.url = newUrl
     form.name = newName
@@ -5914,6 +5965,7 @@ function init()
         end
         effects = now
         effectsSeen = true
+        formFromEffects(now)
         safeRender()
     end
     onGMCPUpdate("char.effects", onEffects)
