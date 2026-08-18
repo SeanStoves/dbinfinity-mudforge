@@ -3,8 +3,8 @@
   "name": "Solao's Dragonball Infinity Plugins",
   "description": "GMCP-driven panels for Dragonball Infinity: scouter map, character portrait, tabbed chat. Plus Transcript, which works anywhere.",
   "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge",
-  "generated": "2026-08-18T11:55:21Z",
-  "pluginCount": 5,
+  "generated": "2026-08-18T15:15:59Z",
+  "pluginCount": 6,
   "plugins": [
     {
       "id": "dbi-map",
@@ -61,6 +61,20 @@
       "size": 159056,
       "license": "MIT",
       "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/codex.md"
+    },
+    {
+      "id": "dbi-alter",
+      "name": "DB Infinity Map Alterer",
+      "version": "2026.08.18.000",
+      "author": "Solao",
+      "description": "Move ranges of rooms on the map, by hand, with an undo.",
+      "category": "widgets",
+      "downloadUrl": "https://raw.githubusercontent.com/SeanStoves/dbinfinity-mudforge/HEAD/dist/dbi-alter.json",
+      "format": "json",
+      "sha256": "bdcc9c6160e380f20fbf5a1e6c25d6c6739b3d52ab3a0fb97ff980851adb36e7",
+      "size": 19675,
+      "license": "MIT",
+      "homepage": "https://github.com/SeanStoves/dbinfinity-mudforge/blob/HEAD/docs/alterer.md"
     },
     {
       "id": "mudlog",

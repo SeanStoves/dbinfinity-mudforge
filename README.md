@@ -51,6 +51,7 @@ below is all you need to remember.
 | **[DB Infinity Portrait](docs/portrait.md)** (`dbi-portrait`) | `dbchar` | Your character: avatar, vitals, power level, transformations, and the full score sheet |
 | **[DB Infinity Chat](docs/chat.md)** (`dbi-chat`) | `dbchat` | Channel traffic split into tabs, with captures you define |
 | **[DB Infinity Codex](docs/codex.md)** (`dbi-codex`) | `dbdex` | A searchable record of the mobs and items you have met, built from what the MUD says in passing |
+| **[DB Infinity Map Alterer](docs/alterer.md)** (`dbi-alter`) | `dbalter` | Move ranges of rooms on the map by hand, with an undo. Saves nothing |
 | **[Transcript](docs/transcript.md)** (`mudlog`) | `mudlog` | Plain-text session logs on disk, for any MUD. Needs the File System Access permission |
 
 Scouter and Mapper are not the same thing and do not overlap: Scouter draws the

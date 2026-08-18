@@ -64,6 +64,7 @@ CATALOGUE = {
     "dbi-portrait": ("widgets", "docs/portrait.md"),
     "dbi-chat":     ("widgets", "docs/chat.md"),
     "dbi-codex":    ("widgets", "docs/codex.md"),
+    "dbi-alter":    ("widgets", "docs/alterer.md"),
     # dbi-mapper is not published any more. The server sends room.info over
     # GMCP now -- vnum, name, area and every exit -- so the client's own
     # automapper is fed directly and there is nothing left for a plugin that
