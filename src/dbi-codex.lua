@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.003",
+    version     = "2026.08.18.004",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -183,6 +183,17 @@ local pending = ""
 -- new and being shown every mob you have ever met is not a list, it is an
 -- archive.
 local hereOnly = true
+-- The last area here() could name.
+--
+-- here() needs getPlayerRoom AND getMapRoom to answer, and getMapRoom returns
+-- nil for a room the mapper has not settled yet -- which is precisely a room
+-- you have just walked into for the first time. The list was falling back to
+-- EVERYTHING for that moment: 212 mobs over 27 pages, and the 'Viewing:' line
+-- gone, on the one screen where you wanted to see what was in front of you.
+--
+-- Falling back to the last known area is wrong far less often, and wrong in a
+-- smaller way: at worst it shows the area you just left for a second.
+local lastArea = ""
 
 -- How tall the panel is, and which page of the list is showing.
 --
@@ -1781,9 +1792,23 @@ local function matches(rec)
         -- area of their own, so they are never narrowed this way.
         if not hereOnly then return true end
         if type(rec.area) ~= "string" then return true end
+
+        local want = ""
         local spot = here()
-        if type(spot) ~= "table" or spot.area == "" then return true end
-        return trimBoth(rec.area):lower() == trimBoth(spot.area):lower()
+        if type(spot) == "table" and type(spot.area) == "string" then
+            want = trimBoth(spot.area)
+        end
+        if want ~= "" then
+            lastArea = want
+        else
+            want = lastArea
+        end
+
+        -- Only with nothing to go on at all -- no room now and none ever.
+        -- That is a genuinely fresh session, where everything IS the honest
+        -- answer.
+        if want == "" then return true end
+        return trimBoth(rec.area):lower() == want:lower()
     end
     local hay = tostring(rec.name or ""):lower()
     if hay:find(filter, 1, true) then return true end
