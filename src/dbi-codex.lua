@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.007",
+    version     = "2026.08.18.008",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -3029,8 +3029,25 @@ local function mobOut(rec)
     -- guessed -- which is what makes it safe for another plugin to send.
     -- Absent when nothing has confirmed one, and a caller should fall back to
     -- the full name rather than inventing something.
+    -- kind goes with it. room.info calls a thing 'mob' or 'pacifist' and this
+    -- is the only way another plugin learns which -- the panel showed it from
+    -- the first day and the record handed out never carried it, so dbtrain's
+    -- pacifist filter read nil for every mob and treated the lot as fair
+    -- game. It walked into A Wounded Namek and opened on it.
+    --
+    -- A plain string, so there is nothing to copy: the rule about handing out
+    -- copies is for the tables underneath, which are live and edited in place.
     local out = { name = rec.name, area = rec.area, pl = safeNum(rec.pl),
+                  kind = rec.kind,
                   kw = scanKw[keyOf(rec.name)], rooms = {} }
+    -- unique goes with it too, for the same reason kind does: it is marked
+    -- here and acted on elsewhere. Kept off the record and in its own table,
+    -- keyed by zone and name, so it is looked up rather than read off rec.
+    if type(rec.area) == "string" and type(rec.name) == "string" then
+        if store.unique[rec.area .. "|" .. keyOf(rec.name)] == true then
+            out.unique = true
+        end
+    end
     for _, n in ipairs(roomList(rec)) do push(out.rooms, n) end
     return out
 end
