@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.001",
+    version     = "2026.08.18.002",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -118,6 +118,23 @@ store.skipTypes = { player = true }
 -- Four scans, and worse than wasted: a keyword that was never tested is not a
 -- keyword that is wrong, and the chain was on its way to recording one.
 store.hereNow = { vnum = nil, names = {} }
+
+-- Power levels that follow from the NAME, in one area.
+--
+--   store.assume["marble halls|the majin lieutenant"] = 100000000000
+--
+-- Most areas need scanning per spawn point, because the same name is not the
+-- same creature: 'A Ginyu warrior' runs from 1m to 20m in The Ginyu Base, and
+-- filing them together would put a 20m mob behind a 1m reading.
+--
+-- Some areas are not like that. Every Majin Lieutenant is 100b, they wander,
+-- and there are three in a room -- so scanning a spawn point teaches nothing
+-- that the name did not already say, and there is no spawn point to teach it
+-- about anyway.
+--
+-- Declared per AREA rather than globally, because the reason the key carries
+-- an area is that a name means different things in different places.
+store.assume = {}
 
 -- Who teaches what, keyed by room.
 --
@@ -698,6 +715,14 @@ local function noteMob(name, spot, pl)
     if type(spot) ~= "table" then return nil end
     local clean = cleanName(name)
     if clean == "" then return nil end
+
+    -- A declared power level stands in for a scan, and ONLY when there is no
+    -- reading: something actually scanned always wins, because the assumption
+    -- is a claim about the area and the scan is a fact about the mob.
+    if safeNum(pl) == nil then
+        local said = store.assume[trimBoth(spot.area):lower() .. "|" .. keyOf(clean)]
+        if safeNum(said) ~= nil then pl = safeNum(said) end
+    end
 
     local key = mobKey(spot.area, clean, pl)
     local rec = nil
@@ -1456,7 +1481,8 @@ local function saveAll()
         saveTable(store.KEY, { mobs = outMobs, items = outItems, view = ui.view,
                            kw = scanKw, trainers = store.trainers,
                            seenTypes = store.seenTypes,
-                           skipTypes = store.skipTypes }, "global")
+                           skipTypes = store.skipTypes,
+                           assume = store.assume }, "global")
     end)
     if not ok then
         lastError = "save: " .. tostring(err)
@@ -1487,6 +1513,14 @@ local function loadAll()
 
     -- Merged rather than replaced, so the seeded types survive a store written
     -- before they existed.
+    if type(p.assume) == "table" then
+        for k, v in pairs(p.assume) do
+            if type(k) == "string" and safeNum(v) ~= nil then
+                store.assume[k] = safeNum(v)
+            end
+        end
+    end
+
     if type(p.seenTypes) == "table" then
         for k, v in pairs(p.seenTypes) do
             if type(k) == "string" and type(v) == "table" then
@@ -2483,6 +2517,95 @@ local function dexCommand(cmd)
     -- They queue. The MUD answers one scan at a time and this plugin tracks
     -- one -- 'tried' holds which mob was asked about and with which word --
     -- so three at once come back with no way to tell whose outline is whose.
+    elseif low == "assume" or low:sub(1, 7) == "assume " then
+        -- 'dbdex assume <pl> <name>'   in the area you are standing in
+        -- 'dbdex assume'               list them
+        -- 'dbdex assume off <name>'    drop one
+        local at = here()
+        local zone = ""
+        if type(at) == "table" and type(at.area) == "string" then zone = at.area end
+        local rest = trimBoth(cmd:sub(7))
+
+        if rest == "" then
+            local names = {}
+            for k in pairs(store.assume) do names[#names + 1] = k end
+            table.sort(names)
+            if #names == 0 then
+                echo(TAG .. "nothing assumed. 'dbdex assume <pl> <name>' says "
+                    .. "every mob of that name in this area is that power.",
+                    hue.GOLD)
+                return
+            end
+            echo(TAG .. "assumed power levels -- CLAIMED, never scanned:",
+                "#ff3333")
+            for _, k in ipairs(names) do
+                echo("   " .. k .. "  =  " .. commas(store.assume[k]), "#ff3333")
+            end
+            return
+        end
+
+        if zone == "" then
+            echo(TAG .. "no area yet -- walk somewhere first.", "#ff6666")
+            return
+        end
+
+        local drop = rest:match("^off%s+(.+)$")
+        if type(drop) == "string" and drop ~= "" then
+            -- Rebuilt, not keyed to nil: a key set to nil is not reliably
+            -- gone here, and an assumption that will not go away is worse
+            -- than one that was never made.
+            local gone = zone:lower() .. "|" .. keyOf(drop)
+            local kept = {}
+            for k, v in pairs(store.assume) do
+                if k ~= gone then kept[k] = v end
+            end
+            store.assume = kept
+            saveAll()
+            echo(TAG .. "no longer assuming a power for " .. drop .. " in "
+                .. zone .. ".", hue.GOLD)
+            return
+        end
+
+        local num, who = rest:match("^(%S+)%s+(.+)$")
+        local pl = safeNum(num)
+        -- Commas are how the MUD writes it and how anyone will type it.
+        if pl == nil and type(num) == "string" then
+            pl = safeNum((num:gsub(",", "")))
+        end
+        if pl == nil or type(who) ~= "string" or trimBoth(who) == "" then
+            echo(TAG .. "'dbdex assume <pl> <name>' -- e.g. "
+                .. "'dbdex assume 100000000000 The Majin Lieutenant'.", "#ff6666")
+            return
+        end
+
+        who = trimBoth(who)
+        store.assume[zone:lower() .. "|" .. keyOf(who)] = pl
+        saveAll()
+
+        -- Loud, and red, on purpose.
+        --
+        -- Everything else in this plugin is a reading: the MUD said it and it
+        -- was written down. This is the one thing that is not. It is a claim,
+        -- taken on trust, and everything downstream treats it exactly like a
+        -- scan -- the hunter picks fights on it, the suppressor sets a level
+        -- from it, and neither has any way to tell it from a real one.
+        --
+        -- Wrong here is not a wrong number on a panel. It is walking into
+        -- something ten times the size it was declared to be, at a
+        -- suppression level chosen to match the claim.
+        echo(TAG .. "!! ASSUMED, NOT SCANNED !!", "#ff3333")
+        echo("   every " .. who .. " in " .. zone .. " will be treated as "
+            .. commas(pl) .. " without ever being read.", "#ff3333")
+        echo("   nothing checks this. Hunting picks fights on it and suppress "
+            .. "sets a level from it,", "#ff3333")
+        echo("   the same as it would from a real scan. If the number is "
+            .. "wrong, that is a fight", "#ff3333")
+        echo("   entered at the wrong size and nothing will say so.", "#ff3333")
+        echo("   you are vouching for it. 'dbdex assume off " .. who
+            .. "' takes it back.", "#ff3333")
+        echo(TAG .. "already-recorded ones keep their own readings; this "
+            .. "fills in from here on.", hue.GOLD)
+
     elseif low == "types" then
         -- Every actor type the wire has handed over, with a count and the
         -- first name that carried it. The counts are what make this worth
@@ -2651,6 +2774,8 @@ local function dexCommand(cmd)
         echo("          dbdex forget          drop everything recorded", hue.GOLD)
         echo("          dbdex scanall         read everything in this room", hue.GOLD)
         echo("          dbdex types           actor types GMCP has sent", hue.GOLD)
+        echo("          dbdex assume <pl> <name>  every mob of that name here", hue.GOLD)
+        echo("                                    is that power, no scan needed", hue.GOLD)
         echo("          dbdex ignore <type>   stop recording that type", hue.GOLD)
         echo("          dbdex allow <type>    record it again", hue.GOLD)
         echo("          dbdex diag            what it knows and where it thinks you are", hue.GOLD)
