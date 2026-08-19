@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.19.000",
+    version     = "2026.08.19.001",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -234,6 +234,61 @@ ui.detail = ""
 -- far. Empty means nobody is typing.
 local kwEdit = ""
 local kwTyped = ""
+-- The same pair for the power level. Androids cannot be scanned -- every one
+-- of them reads 0 -- and a 0 is worse than nothing: the hunt floor is
+-- 'pl > 0', so an assumed 0 makes the mob invisible to the hunter rather
+-- than merely unknown. "They have no PL... you have to base it off the sense
+-- reading. And they will be a large portion of gaining."
+local plEdit = ""
+local plTyped = ""
+
+-- Our own power level, and the sense ladder that needs it.
+--
+-- A sense line is a RATIO and nothing else, so it is worth a number only
+-- beside the power level it was measured against. Taken off GMCP: the prompt
+-- carries it too, but a printed line is something anyone able to put text on
+-- the screen can write, and this one decides what gets attacked.
+local myPl = nil
+
+-- What a sense line says about a mob, as a multiple of OUR power level.
+-- The MUD's own help gives the thresholds; notes/sense-ladder.md has the
+-- whole table with the wording.
+--
+-- Each figure is the TOP of its band -- the biggest a mob can be and still
+-- read that way. Deliberate: a mob read LOW is a fight picked on a number
+-- nobody measured, and enemy < mine is the rule the hunt rests on. Wrong
+-- toward "bigger than it is" costs a fight not taken; wrong the other way
+-- costs the fight.
+--
+-- Plain substring matching, never a pattern. A character class here is
+-- translated to a JavaScript regex and several of the forms this would want
+-- do not survive the trip.
+--
+-- The five wordings with no ratio at all -- "Just walk away...", "Are you
+-- mad!?", and the rest -- are deliberately absent. They mean do not engage,
+-- and inventing a multiple for them is the one mistake that gets you killed.
+local SENSE = {
+    { "seems to be about as strong as you", 1.33 },
+    { "sense a lesser power",          1 / 1.25 },
+    { "sense a minor power",           1 / 1.50 },
+    { "sense a small power",           1 / 1.75 },
+    { "sense an insignificant power",  1 / 2 },
+    { "sense a very small power",      1 / 2.5 },
+    { "sense a laughable power",       1 / 3 },
+    { "sense a feeble power",          1 / 4 },
+    { "where did that chicken go",     1 / 5 },
+    { "imaginary friend",              1 / 7.5 },
+    { "Hercule seems strong",          1 / 10 },
+    { "sense a greater power",         1.43 },
+    { "sense a significant power",     1.66 },
+    { "sense a substantial power",     2 },
+    { "sense an imposing power",       2.5 },
+    { "sense a disturbing power",      3.33 },
+    { "sense a frightening power",     5 },
+    { "kill you in the time it took you to blink", 10 },
+    { "Do you feel lucky, punk",       20 },
+    { "talking is the best answer",    100 },
+}
 -- Whether the 'found on' tree is open. One flag, because only one item's detail
 -- is on screen at a time.
 local srcOpen = false
@@ -626,6 +681,149 @@ end
 --
 -- Needs a scan to merge TO. Without one there is no power to pin and nothing
 -- to be gained, so it refuses rather than inventing a number.
+-- Set a mob's power level by hand.
+--
+-- markUnique below is the same shape and refuses when nothing was scanned;
+-- this is for the case where a scan is not possible at all. An android reads
+-- 0 however many times it is scanned, so the number has to come from
+-- somewhere else -- the sense line, or knowing the area.
+--
+-- The store key carries the power level, so changing it means re-keying the
+-- record rather than editing it in place. Duplicates for the same mob in the
+-- same area collapse into the one being kept, exactly as markUnique does.
+--
+-- Writes store.assume as well, and that is the point: assume is what dbtrain
+-- reads, and what makes the panel say the number was not measured.
+local function setPl(area, name, pl)
+    local zone = trimBoth(area):lower()
+    local key = keyOf(name)
+    if zone == "" or key == "" then return nil, "no area" end
+    local want = safeNum(pl)
+    if want == nil or want < 0 then return nil, "not a number" end
+
+    local keep = nil
+    local mine, mn = {}, 0
+    for k, v in pairs(store.mobs) do
+        if type(v) == "table" and type(v.name) == "string"
+            and trimBoth(tostring(v.area or "")):lower() == zone
+            and keyOf(v.name) == key then
+            mn = mn + 1
+            mine[mn] = k
+            if keep == nil then keep = v end
+        end
+    end
+    if keep == nil then return nil, "not recorded here" end
+
+    local rooms = {}
+    for i = 1, mn do
+        local v = store.mobs[mine[i]]
+        if type(v) == "table" and type(v.rooms) == "table" then
+            for rk, rv in pairs(v.rooms) do
+                if safeNum(rv) ~= nil then rooms[rk] = rv end
+            end
+        end
+    end
+    keep.rooms = rooms
+    keep.pl = want
+
+    -- Rebuilt rather than keyed to nil. Setting a key to nil does not
+    -- reliably remove it here, and the old key carries the old power level,
+    -- so a failed delete leaves the mob listed twice at two different
+    -- readings.
+    local kept = {}
+    for k, v in pairs(store.mobs) do
+        local drop = false
+        for i = 1, mn do
+            if mine[i] == k then drop = true break end
+        end
+        if not drop then kept[k] = v end
+    end
+    kept[mobKey(keep.area, keep.name, want)] = keep
+    store.mobs = kept
+    store.assume[zone .. "|" .. key] = want
+    return want, mn
+end
+
+-- Read a sense line as a power level.
+--
+-- Androids cannot be scanned -- every one of them reads 0, however many
+-- times -- so this is the only number they will ever carry. That matters
+-- because they are a large part of what is worth fighting.
+--
+-- ONLY when exactly one mob is standing here. The sense lines arrive after
+-- the room description, one per mob, carrying no names at all:
+--
+--   Obvious exits:
+--   North East South West
+--   +You sense a small power.
+--
+-- so with two mobs in the room there is nothing whatsoever to say which
+-- reading belongs to which. Counted across a day of logs: 317 rooms gave one
+-- sense line, 66 gave two, one gave three. Skipping the ambiguous ones costs
+-- little, because the same mob stands somewhere alone soon enough.
+--
+-- And it never overwrites a real scan. A measured number beats an estimate
+-- from a band every time; this fills in what nothing else can.
+local function senseRead(clean)
+    local mine = safeNum(myPl)
+    if mine == nil or mine <= 0 then return false end
+
+    local mult = nil
+    for _, row in ipairs(SENSE) do
+        if clean:find(row[1], 1, true) ~= nil then
+            mult = row[2]
+            break
+        end
+    end
+    if mult == nil then return false end
+
+    local spot = here()
+    if type(spot) ~= "table" then return false end
+    local zone = tostring(spot.area or "")
+    if trimBoth(zone) == "" then return false end
+    -- here() calls it 'num'. Asking for spot.vnum compares a real number
+    -- against nil, which is never equal, so this returned false every single
+    -- time and the whole reader did nothing at all.
+    if store.hereNow.vnum ~= spot.num then return false end
+
+    local only, n = nil, 0
+    for nm in pairs(store.hereNow.names) do
+        n = n + 1
+        only = nm
+    end
+    if n ~= 1 or type(only) ~= "string" then return false end
+
+    local kind = store.hereNow.kinds[only]
+    if kind == "player" or kind == "pacifist" then return false end
+
+    -- Already measured, or already estimated at this power. Nothing to do.
+    local key = keyOf(only)
+    local had = nil
+    for _, v in pairs(store.mobs) do
+        if type(v) == "table" and type(v.name) == "string"
+            and trimBoth(tostring(v.area or "")):lower() == trimBoth(zone):lower()
+            and keyOf(v.name) == key then
+            local p = safeNum(v.pl)
+            if p ~= nil and p > 0 then had = p end
+        end
+    end
+    if had ~= nil then return false end
+
+    local est = math.floor(mine * mult)
+    if est <= 0 then return false end
+    -- Both values. Sharp edge 4: one name capturing a two-value return gets
+    -- the wrapped pair here, and a pair compared against nil is not nil.
+    local got, why = setPl(zone, only, est)
+    if got == nil then return false end
+    -- The CALLER saves. saveAll is declared a thousand lines below this and a
+    -- file-scope local used above its declaration resolves as a nil global --
+    -- which throws, from a line that reads perfectly.
+    echo(TAG .. only .. " senses at about " .. commas(got)
+        .. " against our " .. commas(mine)
+        .. " -- recorded as assumed, not scanned.", hue.UNKNOWN)
+    return true
+end
+
 local function markUnique(area, name)
     local zone = trimBoth(area):lower()
     local key = keyOf(name)
@@ -2064,9 +2262,23 @@ local function mobDetailBody()
 
     line("area", escapeHtml(tostring(m.area or "")))
 
+    -- Editable. An android reads 0 from every scan there will ever be, so
+    -- the only way it gets a usable number is by hand.
     local plTxt = "never scanned"
     if safeNum(m.pl) then plTxt = commas(m.pl) end
-    line("power", escapeHtml(plTxt))
+    local plCell
+    if plEdit == keyOf(m.name) then
+        -- No data-mud-action on the form: an action fires on a click
+        -- ANYWHERE inside the element carrying it, the input included, so
+        -- clicking into the box would save and close it.
+        plCell = '<form><input id="dexpl" type="text" value="'
+            .. escapeHtml(plTyped) .. '" size="12"></form>'
+            .. '<span class="go" data-mud-action="plsave">set</span>'
+    else
+        plCell = '<span class="go2" data-mud-action="pledit" data-mud-data="'
+            .. escapeHtml(m.name) .. '">' .. escapeHtml(plTxt) .. "</span>"
+    end
+    line("power", plCell)
 
     local what = ""
     if type(m.race) == "string" and m.race ~= "" then what = m.race end
@@ -3402,6 +3614,20 @@ function init()
     -- boundary is not reliably 1-indexed -- 0-indexed and object-with-numeric-
     -- keys have both turned up -- and pairs() is right for all three.
     pcall(function()
+        -- Our own power level. A sense line is a ratio and says nothing on
+        -- its own; this is the number it is a ratio OF.
+        --
+        -- One lowercase name only. GMCP dispatch is case-insensitive and fans
+        -- one packet out to EVERY registered spelling, so registering 'char'
+        -- and 'Char.Vitals' as well would deliver the same packet three times.
+        onGMCPUpdate("char.vitals", function(data)
+            pcall(function()
+                if type(data) ~= "table" then return end
+                local p = safeNum(data.pl)
+                if p ~= nil and p > 0 then myPl = p end
+            end)
+        end)
+
         onGMCPUpdate("room.info", function(data)
             pcall(function()
                 if type(data) ~= "table" then return end
@@ -3718,6 +3944,45 @@ function init()
             if word ~= "" then
                 pcall(function() send("scan " .. word) end)
             end
+        elseif act == "pledit" then
+            local nm = tostring(arg or "")
+            if nm ~= "" then
+                plEdit = keyOf(nm)
+                plTyped = ""
+                safeRender(true)
+            end
+        elseif act == "plsave" then
+            -- Typed by a person, so commas and spaces are expected. Strip
+            -- them one character at a time: a class holding a ']' hands the
+            -- subject back unchanged here, and a range inside one is not
+            -- honoured, so [^%d] is not safe to reach for.
+            local raw = tostring(plTyped or "")
+            raw = raw:gsub(",", "")
+            raw = raw:gsub("%s", "")
+            local want = safeNum(raw)
+            local who = plEdit
+            plEdit = ""
+            plTyped = ""
+            -- The record's OWN area, not the room being stood in. The
+            -- detail view can be reached from a search, and setting a power
+            -- level against wherever we happen to be would write it onto a
+            -- different area's copy of the same mob.
+            local rec = store.mobs[ui.detail]
+            if who ~= "" and want ~= nil and want >= 0
+                and type(rec) == "table" then
+                local got, why = setPl(tostring(rec.area or ""),
+                                       tostring(rec.name or ""), want)
+                if got ~= nil then
+                    saveAll()
+                    echo(TAG .. tostring(rec.name) .. " set to " .. commas(got)
+                        .. " by hand -- hunting and suppress both read that "
+                        .. "the same as a scan.", hue.UNKNOWN)
+                else
+                    echo(TAG .. "could not set it: " .. tostring(why),
+                        hue.UNKNOWN)
+                end
+            end
+            safeRender(true)
         elseif act == "kwedit" then
             -- Open the field on this mob, seeded with whatever it answers to
             -- now so a small correction is a small edit.
@@ -3794,6 +4059,12 @@ function init()
             if type(e.targetValue) == "string" then kwTyped = e.targetValue end
             return
         end
+        -- Captured on keyup and applied on save. Rendering here would rebuild
+        -- the content, which replaces the input and takes the caret with it.
+        if e.targetId == "dexpl" then
+            if type(e.targetValue) == "string" then plTyped = e.targetValue end
+            return
+        end
         if e.targetId ~= "dexfind" then return end
         if type(e.targetValue) == "string" then pending = e.targetValue end
         -- Enter, if the event says so. It is not documented to carry a key, so
@@ -3812,6 +4083,17 @@ function init()
     registerWidgetEvent(ui.id, "submit", function(e)
         noteUi("submit", e)
         -- Enter in the keyword field saves it, same as the button.
+        -- Enter inside the power-level box. Without this the number can only
+        -- be committed by clicking 'set', and pressing Enter in a form falls
+        -- through to the SEARCH below -- which would drop the detail view and
+        -- lose what was typed.
+        if plEdit ~= "" then
+            if type(e) == "table" and type(e.targetValue) == "string" then
+                plTyped = e.targetValue
+            end
+            onAction({ action = "plsave" })
+            return
+        end
         if kwEdit ~= "" then
             if type(e) == "table" and type(e.targetValue) == "string" then
                 kwTyped = e.targetValue
@@ -3961,6 +4243,12 @@ function onLine(sessionId, rawLine, cleanLine)
 
         dropLine = false
         local touched = false
+        -- A sense reading, before anything else looks at the line. It is the
+        -- only power level an android will ever have.
+        if senseRead(clean) then
+            saveAll()
+            return
+        end
         if readTrainer(clean) then
             saveAll()
             return
