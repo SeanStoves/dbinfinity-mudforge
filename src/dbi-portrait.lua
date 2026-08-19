@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-portrait",
     name        = "DB Infinity Portrait",
-    version     = "2026.08.18.001",
+    version     = "2026.08.19.000",
     author      = "Solao",
     description = "Character portrait and sheet for Dragonball Infinity, off char.vitals and score.",
     settings    = { saveState = true },
@@ -3762,7 +3762,11 @@ local function footBar()
         -- The stats on hover, for anyone who would rather not put an
         -- analyze in their own output to see them. A plain title attribute:
         -- no script in the widget, and newlines survive as &#10;.
+        -- The label follows the same rule the click does, so the button
+        -- cannot promise a percentage it is not going to send.
+        local opening = (at == nil or at <= 0)
         local tip = "bid 25% over the standing bid"
+        if opening then tip = "no bid standing -- open it at 1" end
         if type(charState.auctionTip) == "string"
             and charState.auctionTip ~= "" then
             tip = charState.auctionTip .. "\n\n" .. tip
@@ -3772,8 +3776,10 @@ local function footBar()
         -- ',1' on the end of it.
         local tipHtml = escapeHtml(tip)
         tipHtml = tipHtml:gsub("\n", "&#10;")
+        local bidLabel = "bid +25%"
+        if opening then bidLabel = "bid 1" end
         add('<span class="fpill auc" data-mud-action="aucbid" title="'
-            .. tipHtml .. '">bid +25%</span>')
+            .. tipHtml .. '">' .. bidLabel .. "</span>")
     end
 
     if #t == 0 then return "" end
@@ -4742,7 +4748,16 @@ local function makeWidget()
             -- Sent, not staged. An auction is over in seconds and a
             -- confirmation step is the difference between bidding and
             -- watching somebody else win.
-            pcall(function() send("auc bid +") end)
+            --
+            -- Nothing standing means there is nothing to add a quarter TO,
+            -- and a quarter more than nothing is nothing -- so the '+' form
+            -- does not open an auction, it only raises one. Open at 1.
+            local standing = safeNum(charState.auctionBid)
+            if standing == nil or standing <= 0 then
+                pcall(function() send("auc bid 1") end)
+            else
+                pcall(function() send("auc bid +") end)
+            end
         elseif act == "cfg" then
             -- A toggle: the gear both opens and leaves. Clicking a tab leaves
             -- too, so there is no way to be stuck in here.
