@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.18.008",
+    version     = "2026.08.19.000",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -100,6 +100,7 @@ store.skipTypes = { player = true }
 --
 --   hereNow.vnum   the room it describes
 --   hereNow.names  [lowercased name] = true
+--   hereNow.kinds  [lowercased name] = the type GMCP gave it
 --
 -- Not saved. It is true for as long as nobody moves, which is not long.
 --
@@ -117,7 +118,7 @@ store.skipTypes = { player = true }
 --
 -- Four scans, and worse than wasted: a keyword that was never tested is not a
 -- keyword that is wrong, and the chain was on its way to recording one.
-store.hereNow = { vnum = nil, names = {} }
+store.hereNow = { vnum = nil, names = {}, kinds = {} }
 
 -- Power levels that follow from the NAME, in one area.
 --
@@ -833,6 +834,23 @@ local function noteMob(name, spot, pl)
     if type(spot) ~= "table" then return nil end
     local clean = cleanName(name)
     if clean == "" then return nil end
+
+    -- Not a player.
+    --
+    -- skipTypes already refuses them on the GMCP path, but a scan TYPED BY
+    -- HAND arrives as plain output with no type on it -- the same shape a
+    -- mob's scan has -- so nothing stopped one being recorded. Arashi went
+    -- in that way.
+    --
+    -- Only on a positive answer. GMCP has to have named this room and named
+    -- this actor a player; an absent actor list means "we do not know", and
+    -- refusing on that would stop recording anything Codex has not seen
+    -- standing in front of it.
+    local kinds = store.hereNow.kinds
+    if type(kinds) == "table" then
+        local saidKind = kinds[clean:lower()]
+        if saidKind == "player" then return nil end
+    end
 
     -- A declared power level stands in for a scan, and ONLY when there is no
     -- reading: something actually scanned always wins, because the assumption
@@ -2028,7 +2046,16 @@ local function mobDetailBody()
     local function add(x) t[#t + 1] = x end
 
     add('<div class="head"><span class="tb" data-mud-action="back">back</span>')
-    add('<span class="dn">' .. escapeHtml(m.name) .. "</span></div>")
+    add('<span class="dn">' .. escapeHtml(m.name) .. "</span>")
+    -- Two clicks. One is how a scan reading gets thrown away by a slip, and
+    -- a reading is the expensive thing here -- it may be an hour before the
+    -- same mob is stood in front of again, or never.
+    if ui.delArm == ui.detail then
+        add('<span class="tb on" data-mud-action="del">really?</span>')
+    else
+        add('<span class="tb" data-mud-action="del">delete</span>')
+    end
+    add("</div>")
 
     local function line(k, v)
         add('<div class="row"><span class="dk">' .. escapeHtml(k) .. "</span>")
@@ -3393,7 +3420,7 @@ function init()
                 -- Rebuilt, not cleared and refilled: setting a key to nil
                 -- does not reliably remove it here, so an emptied table would
                 -- go on reporting whoever used to be in it.
-                store.hereNow = { vnum = at, names = {} }
+                store.hereNow = { vnum = at, names = {}, kinds = {} }
 
                 for _, one in pairs(box.actors) do
                     -- A missing GMCP field crosses as the string 'undefined',
@@ -3408,6 +3435,10 @@ function init()
                         if type(kind) ~= "string" or kind == ""
                             or kind == "undefined" then kind = "(none)" end
                         store.hereNow.names[one.name:lower()] = true
+                        -- The type as well as the name. A scan cannot tell a
+                        -- player from a mob -- the output is the same shape --
+                        -- and this is the only place the server says which.
+                        store.hereNow.kinds[one.name:lower()] = kind
 
                         local row = store.seenTypes[kind]
                         if type(row) ~= "table" then row = { n = 0, eg = "" } end
@@ -3594,8 +3625,48 @@ function init()
             safeRender()
         elseif act == "back" then
             ui.detail = ""
+            ui.delArm = ""
             srcOpen = false
             safeRender()
+        elseif act == "del" then
+            if ui.delArm ~= ui.detail then
+                ui.delArm = ui.detail
+                safeRender()
+            else
+                -- REBUILT, never keyed to nil. Setting a table key to nil
+                -- does not reliably remove it here -- pairs() goes on
+                -- yielding it -- so a deleted mob would come back looking
+                -- like the delete had failed.
+                local gone = store.mobs[ui.detail]
+                local kept = {}
+                for k, v in pairs(store.mobs) do
+                    if k ~= ui.detail then kept[k] = v end
+                end
+                store.mobs = kept
+
+                -- The marks that hang off the NAME go too, or a re-scan
+                -- comes back already assumed and already unique.
+                if type(gone) == "table" and type(gone.area) == "string"
+                    and type(gone.name) == "string" then
+                    local side = trimBoth(gone.area):lower() .. "|"
+                        .. keyOf(gone.name)
+                    local a2 = {}
+                    for k, v in pairs(store.assume) do
+                        if k ~= side then a2[k] = v end
+                    end
+                    store.assume = a2
+                    local u2 = {}
+                    for k, v in pairs(store.unique) do
+                        if k ~= side then u2[k] = v end
+                    end
+                    store.unique = u2
+                    echo(TAG .. "forgotten: " .. gone.name .. ".", hue.GOLD)
+                end
+                ui.delArm = ""
+                ui.detail = ""
+                saveAll()
+                safeRender()
+            end
         elseif act == "find" then
             -- targetValue if the event carries one, and what typing captured
             -- if it does not -- a submit is not documented to carry the input's
