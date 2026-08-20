@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.19.001",
+    version     = "2026.08.20.000",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -3283,7 +3283,20 @@ local function mobOut(rec)
     -- here and acted on elsewhere. Kept off the record and in its own table,
     -- keyed by zone and name, so it is looked up rather than read off rec.
     if type(rec.area) == "string" and type(rec.name) == "string" then
-        if store.unique[rec.area .. "|" .. keyOf(rec.name)] == true then
+        -- The SAME key every other site builds: trimmed and lowercased.
+        --
+        -- This one used rec.area raw, so it asked for "Maima Region|zarbon"
+        -- against a store written as "maima region|zarbon" and never matched.
+        -- The panel reads the store directly and showed 'uniq' correctly, so
+        -- the flag looked fine from the outside -- while every mob handed to
+        -- another plugin went out as ordinary.
+        --
+        -- What that cost: dbtrain's only guard against story characters is
+        -- 'm.unique ~= true', and with the flag missing it picked Zarbon,
+        -- General of the Frieza Force -- 5,000,000,000 -- as a hunting
+        -- target and opened on it.
+        local uk = trimBoth(rec.area):lower() .. "|" .. keyOf(rec.name)
+        if store.unique[uk] == true then
             out.unique = true
         end
     end
