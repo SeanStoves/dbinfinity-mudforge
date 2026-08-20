@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.20.000",
+    version     = "2026.08.20.001",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -694,7 +694,16 @@ end
 --
 -- Writes store.assume as well, and that is the point: assume is what dbtrain
 -- reads, and what makes the panel say the number was not measured.
-local function setPl(area, name, pl)
+-- scanned: this figure came off a real scan rather than a guess.
+--
+-- A scan BEATS everything -- "we use powerlevel for everything if scan works,
+-- only sense powerlevel range if scan didn't work" -- so it clears the assume
+-- marker rather than setting it, and the record stops reading 'asm'.
+--
+-- Without that the two disagree forever: the record carries a measured number
+-- while store.assume still holds the guess, so the panel keeps saying the
+-- reading was never taken and scanall keeps skipping it.
+local function setPl(area, name, pl, scanned)
     local zone = trimBoth(area):lower()
     local key = keyOf(name)
     if zone == "" or key == "" then return nil, "no area" end
@@ -740,7 +749,18 @@ local function setPl(area, name, pl)
     end
     kept[mobKey(keep.area, keep.name, want)] = keep
     store.mobs = kept
-    store.assume[zone .. "|" .. key] = want
+    if scanned == true then
+        -- Rebuilt rather than keyed to nil: a key set to nil is not reliably
+        -- removed here, and an assume marker that will not clear leaves the
+        -- record reading 'asm' forever and skipped by scanall for good.
+        local left = {}
+        for k, v in pairs(store.assume) do
+            if k ~= zone .. "|" .. key then left[k] = v end
+        end
+        store.assume = left
+    else
+        store.assume[zone .. "|" .. key] = want
+    end
     return want, mn
 end
 
@@ -1384,7 +1404,27 @@ local function feedScan(clean)
         if type(tail) == "string" then pl = safeNum((tail:gsub("[^%d]", ""))) end
         if pl then
             local spot = here()
-            if spot then noteMob(scan.who, spot, pl) end
+            if spot then
+                -- A MEASUREMENT replaces a GUESS, and nothing else.
+                --
+                -- noteMob alone is not enough where one was assumed: mobKey
+                -- carries the power level, so a scan that disagrees writes a
+                -- SECOND record and leaves the guess standing. setPl
+                -- collapses them and clears the assume marker, so the record
+                -- stops reading 'asm' and scanall stops skipping it.
+                --
+                -- ONLY where a guess exists. The same name at two SCANNED
+                -- powers is deliberately two records -- a wanderer read at
+                -- different strengths is two facts, not one -- and
+                -- collapsing those would throw a real reading away.
+                local ak = trimBoth(tostring(spot.area or "")):lower()
+                    .. "|" .. keyOf(scan.who)
+                local guessed = store.assume[ak] ~= nil
+                noteMob(scan.who, spot, pl)
+                if guessed then
+                    setPl(tostring(spot.area or ""), scan.who, pl, true)
+                end
+            end
             scan.who = ""
             return true
         end
@@ -3142,8 +3182,24 @@ local function dexCommand(cmd)
 
         local todo = {}
         for _, v in pairs(store.mobs) do
+            -- Never read, OR only ever GUESSED at.
+            --
+            -- The filter used to be "has no power level", which permanently
+            -- excluded every assumed record -- the guess counts as a value,
+            -- so a real scan could never replace it. That is the whole Maima
+            -- ladder: First Class Soldier asm 375,000,000 and the rest, all
+            -- numbers nobody ever read off a scan.
+            --
+            -- A scanned figure is left alone. It is already the best answer
+            -- there is, and a scan costs a round trip.
+            local asked = false
             if type(v) == "table" and type(v.name) == "string"
-                and safeNum(v.pl) == nil
+                and type(v.area) == "string" then
+                local ak = trimBoth(v.area):lower() .. "|" .. keyOf(v.name)
+                asked = store.assume[ak] ~= nil
+            end
+            if type(v) == "table" and type(v.name) == "string"
+                and (safeNum(v.pl) == nil or asked)
                 and (live == nil or live[v.name:lower()]) then
                 for _, r in ipairs(roomList(v)) do
                     if r == vnum then
