@@ -1,7 +1,7 @@
 plugin = {
     id          = "dbi-codex",
     name        = "DB Infinity Codex",
-    version     = "2026.08.20.001",
+    version     = "2026.08.20.002",
     author      = "Solao",
     description = "A searchable record of items and mobs: what they are, and where you found them.",
     settings    = { saveState = true },
@@ -3807,6 +3807,22 @@ function init()
             if type(store.mobs[arg]) == "table" then
                 ui.detail = arg
                 ui.view = "mobs"
+                safeRender()
+            else
+                -- The row is drawn from a key rebuilt out of the record --
+                -- area, name and POWER LEVEL -- so anything that changes the
+                -- power without redrawing leaves a row whose key is no
+                -- longer in the store. Clicking it did nothing whatsoever:
+                -- no detail, no error, a row that simply ignores you.
+                --
+                -- That is how a sense-derived Invasion Soldier at 263,227,479
+                -- read as a phantom that could not be opened or deleted. Say
+                -- so and redraw, which rebuilds every key from the store as
+                -- it now stands.
+                echo(TAG .. "that row is out of date -- redrawing. If it is "
+                    .. "still there, its power level changed since the list "
+                    .. "was built.", hue.UNKNOWN)
+                ui.detail = ""
                 safeRender()
             end
 
